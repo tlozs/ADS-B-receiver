@@ -9,7 +9,7 @@
 typedef struct {
     int16_t *data;
     size_t actual_sample_count;
-    bool is_full;
+    bool is_valid;
 } iq_samps_t;
 
 typedef struct {

@@ -19,7 +19,7 @@
         goto label;                 \
     }
 
-int init_usrp(sdr_ctx_t *ctx) {
+int init_usrp(rx_ctx_t *ctx) {
 
     // Define configuration values
     double freq          = 1090e6;
@@ -101,7 +101,7 @@ free_usrp:
     return return_code;
 }
 
-void teardown_usrp(sdr_ctx_t *ctx) {
+void teardown_usrp(rx_ctx_t *ctx) {
     if (!ctx) return;
 
     if (ctx->verbose) fprintf(stderr, "Tearing down SDR hardware...\n");
@@ -111,7 +111,7 @@ void teardown_usrp(sdr_ctx_t *ctx) {
     if (ctx->usrp) uhd_usrp_free(&ctx->usrp);
 }
 
-void do_rx_stream(sdr_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
+void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
     uhd_stream_cmd_t stream_cmd = {
         .stream_mode = UHD_STREAM_MODE_START_CONTINUOUS,
         .stream_now  = true

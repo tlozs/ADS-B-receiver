@@ -8,21 +8,23 @@
 // The size of the ring buffer.
 #define BLOCK_COUNT 16
 
-// Holds a number of IQ data samples.
+// Holds a number of IQ data samples. Stores:
+// - The buffer containing IQ data samples.
+// - The actual number of samples stored in the buffer, as the buffer can be only partially filled.
+// - The flag signaling whether the data inside is ready to be processed.
 typedef struct {
-    // The buffer containing IQ data samples.
     int16_t *data;
-    // The actual number of samples stored in the buffer, as the buffer can be only partially filled.
     size_t actual_sample_count;
-    // The flag signaling whether the data inside is ready to be processed.
     bool is_valid;
 } iq_samps_block_t;
 
-// The ring buffer storing blocks of IQ data samples with additional metadata for management.
+// The ring buffer storing blocks of IQ data samples with additional metadata for management. Stores:
+// - The buffer of buffers, holding blocks of IQ data.
+// - The buffer size of each block.
+// - The mutex and condition variable neccesairy for producer-consumer multithreading.
+// - Keeps track of read and write indexes.
 typedef struct {
-    // The buffer of buffers, holding blocks of IQ data.
     iq_samps_block_t ring[BLOCK_COUNT];
-    // The buffer size of each block.
     size_t block_size;
     uint32_t write_idx;
     uint32_t read_idx;

@@ -1,10 +1,10 @@
 #include "ring_buffer.h"
 
-ring_buffer_t* ring_buffer_create(size_t block_size) {    
+ring_buffer_t* ring_buffer_create(size_t samps_per_block) {    
     ring_buffer_t *rb = calloc(1, sizeof(ring_buffer_t));
     if (!rb) return NULL;
 
-    rb->block_size = block_size;
+    rb->samps_per_block = samps_per_block;
     
     // The NULL argument means "use default thread attributes"
     pthread_mutex_init(&rb->mutex, NULL);
@@ -12,7 +12,7 @@ ring_buffer_t* ring_buffer_create(size_t block_size) {
 
     for (int i = 0; i < BLOCK_COUNT; i++) {
         // Multiply by 2 because complex IQ data has two 16-bit values per sample
-        rb->ring[i].data = malloc(block_size * 2 * sizeof(int16_t));
+        rb->ring[i].data = malloc(samps_per_block * 2 * sizeof(int16_t));
         rb->ring[i].actual_sample_count = 0;
         rb->ring[i].is_valid = false;
     }

@@ -25,7 +25,7 @@ typedef struct {
 // - Keeps track of read and write indexes.
 typedef struct {
     iq_samps_block_t ring[BLOCK_COUNT];
-    size_t block_size;
+    size_t samps_per_block;
     uint32_t write_idx;
     uint32_t read_idx;
     pthread_mutex_t mutex;
@@ -33,7 +33,7 @@ typedef struct {
 } ring_buffer_t;
 
 // Constructs the ring buffer, allocating its memory and initializing the mutex and condition variable.
-ring_buffer_t* ring_buffer_create(size_t block_size);
+ring_buffer_t* ring_buffer_create(size_t samps_per_block);
 void ring_buffer_destroy(ring_buffer_t *rb);
 
 // Checks if there is space in the ring buffer.

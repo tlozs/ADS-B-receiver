@@ -26,6 +26,9 @@ add_executable(adsb_rx
     src/ring_buffer.c
 )
 
+# Tell your executable where to find the <uhd.h> header files
+target_include_directories(adsb_rx PRIVATE ${UHD_INCLUDE_DIRS})
+
 # Enable strict warnings only for my own code, not for libmodes
 target_compile_options(adsb_rx PRIVATE 
     -Wall
@@ -37,7 +40,7 @@ target_compile_options(adsb_rx PRIVATE
 # m = the standard C math library (libm), required because libmodes uses sqrt() and atan2()
 target_link_libraries(adsb_rx 
     PRIVATE 
-    UHD::uhd 
+    ${UHD_LIBRARIES} 
     Threads::Threads 
     m 
     modes_static

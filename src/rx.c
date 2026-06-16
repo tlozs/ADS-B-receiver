@@ -124,21 +124,22 @@ void do_rx_stream(sdr_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep
     }
     
     while (*keep_running) {
-        // 1. Acquire write pointer from the ring buffer
+        // Acquire write pointer from the ring buffer
         int16_t* buff = ring_buffer_acquire_write(rb)->data;
         void** buffs_ptr = (void**)&buff;
 
         size_t num_rx_samps = 0;
         
-        // 2. Receive directly into the shared memory
+        // Receive directly into the shared memory
         if (uhd_rx_streamer_recv(ctx->rx_streamer, buffs_ptr, ctx->samps_per_buff, &ctx->md, 3.0, false, &num_rx_samps) != 0) {
             fprintf(stderr, "Streamer receive failed.\n");
             break;
         }
         
-        // 3. Commit the written samples for the consumer to read
+        // Commit the written samples for the consumer to read
         ring_buffer_commit_write(rb, num_rx_samps);
 
+        // Error handling
         uhd_rx_metadata_error_code_t error_code;
         uhd_rx_metadata_error_code(ctx->md, &error_code);
         if (error_code != UHD_RX_METADATA_ERROR_CODE_NONE) {

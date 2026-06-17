@@ -79,6 +79,13 @@ void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
         printf("   Raw CPR Lon  : %d\n", mm->raw_longitude);
     }
 
+    // Print the Squawk Code (Identity)
+    // Squawk codes are printed in octal format, hence the %04x (or %04o depending on libmodes' internal math)
+    // Actually, libmodes conveniently converts it to base-10 so we can print it directly as %04d
+    if (mm->identity != 0) {
+        printf("   Squawk       : %04d\n", mm->identity);
+    }
+
     printf("=========================================================\n\n");
 }
 

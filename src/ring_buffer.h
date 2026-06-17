@@ -30,6 +30,7 @@ typedef struct {
     uint32_t read_idx;
     pthread_mutex_t mutex;
     pthread_cond_t cond_ready;
+    bool is_shutting_down;
 } ring_buffer_t;
 
 // Constructs the ring buffer, allocating its memory and initializing the mutex and condition variable.
@@ -51,3 +52,5 @@ iq_samps_block_t* ring_buffer_acquire_read(ring_buffer_t *rb);
 // Updates the ring buffer metadata after reading from it via the address acquire_read() returned.
 // This function has to be used after calling ring_buffer_acquire_read first.
 void ring_buffer_commit_read(ring_buffer_t *rb);
+
+void ring_buffer_abort(ring_buffer_t *rb);

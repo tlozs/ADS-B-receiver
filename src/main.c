@@ -53,7 +53,17 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    fprintf(stderr, "\n✈ Radar is LIVE. Listening for ADS-B packets. Press Ctrl+C to stop...\n\n");
+    
+    // The Idle Loop: Main thread just sleeps and checks the kill switch
+    // Future place of database posting
+    while (keep_running) {
+        usleep(100000); // Sleep for 100ms so we don't burn CPU
+    }
+
     fprintf(stderr, "\nInitiating safe shutdown...\n");
+
+    ring_buffer_abort(rb);
     
     // Wait for the decode and rx thread to finish its loop
     pthread_join(decode_thread, NULL);

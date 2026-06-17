@@ -17,6 +17,7 @@ ring_buffer_t* ring_buffer_create(size_t samps_per_block) {
         rb->ring[i].is_valid = false;
     }
 
+    rb->is_shutting_down = false;
     return rb;
 }
 
@@ -72,8 +73,14 @@ iq_samps_block_t* ring_buffer_acquire_read(ring_buffer_t *rb) {
     pthread_mutex_lock(&rb->mutex);
     
     // Go to sleep if the block is not ready yet
-    while (!rb->ring[rb->read_idx].is_valid) {
+    while (!rb->ring[rb->read_idx].is_valid && !rb->is_shutting_down) {
         pthread_cond_wait(&rb->cond_ready, &rb->mutex);
+    }
+
+    // If we woke up because the fire alarm was pulled, bail out immediately
+    if (rb->is_shutting_down) {
+        pthread_mutex_unlock(&rb->mutex);
+        return NULL; 
     }
     
     // Data is ready! 
@@ -91,6 +98,18 @@ void ring_buffer_commit_read(ring_buffer_t *rb) {
     
     // Advance the index
     rb->read_idx = (rb->read_idx + 1) % BLOCK_COUNT;
+    
+    pthread_mutex_unlock(&rb->mutex);
+}
+
+void ring_buffer_abort(ring_buffer_t *rb) {
+    if (!rb) return;
+    
+    pthread_mutex_lock(&rb->mutex);
+    rb->is_shutting_down = true;
+    
+    // Broadcast wakes up ALL threads currently stuck in pthread_cond_wait
+    pthread_cond_broadcast(&rb->cond_ready);
     
     pthread_mutex_unlock(&rb->mutex);
 }

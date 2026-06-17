@@ -79,8 +79,16 @@ void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
 void do_decode(decode_ctx_t* ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
 
     while (*keep_running) {
-        // Acquire read pointer from the ring buffer
-        int16_t* buff = ring_buffer_acquire_read(rb)->data;
+        // Safely acquire the block
+        iq_samps_block_t* block = ring_buffer_acquire_read(rb);
+        
+        // Check for the abort signal
+        if (!block) {
+            break; // Exit the loop so the thread can terminate gracefully
+        }
+
+        // 3. Extract the data safely
+        int16_t* buff = block->data;
 
         // Downsample sc16 values to u8 expected by the complex->mag conversion
         convert_sc16_to_u8(buff, ctx->buff_downsampled, ctx->samps_per_buff * 2);

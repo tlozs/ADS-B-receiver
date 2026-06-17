@@ -87,6 +87,10 @@ void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
     }
 
     printf("=========================================================\n\n");
+
+    // Clear the message state so the next iteration of mode_s_detect 
+    // starts with a clean slate, without modifying third-party code.
+    memset(mm, 0, sizeof(struct mode_s_msg));
 }
 
 void do_decode(decode_ctx_t* ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {

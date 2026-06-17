@@ -34,59 +34,58 @@ void teardown_decode(decode_ctx_t* ctx) {
 void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
     (void)mode_s; // Suppress unused warning
 
-    // Drop the packet if the checksum is broken
-    if (!mm->crcok) {
-        return; 
+    // Only print if the checksum is valid
+    if (mm->crcok) {
+        
+        // Extract the 24-bit ICAO address (The unique hardware ID of the plane)
+        uint32_t icao = (mm->aa1 << 16) | (mm->aa2 << 8) | mm->aa3;
+
+        printf("=========================================================\n");
+        printf("✈  ICAO Address : %06X\n", icao);
+        
+        if (mm->msgtype == 17) {
+            printf("   Message Type : DF17 (Extended Type: %d)\n", mm->metype);
+        } else {
+            printf("   Message Type : DF%d\n", mm->msgtype);
+        }
+
+        // Print the Flight Callsign (e.g., "RYR1234") if available
+        // (Only transmitted in specific DF17 messages)
+        if (mm->flight[0] != '\0') {
+            printf("   Callsign     : %s\n", mm->flight);
+        }
+
+        // Print the Altitude
+        if (mm->altitude != 0) {
+            printf("   Altitude     : %d feet\n", mm->altitude);
+        }
+
+        // Print the Velocity and Heading
+        if (mm->velocity != 0) {
+            printf("   Speed        : %d knots\n", mm->velocity);
+            printf("   Heading      : %d degrees\n", (int)mm->heading);
+            printf("   Vert. Rate   : %d ft/min\n", mm->vert_rate * 64); 
+        }
+
+        // Print Raw GPS Coordinates
+        // Note: ADS-B uses CPR (Compact Position Reporting). 
+        // Converting raw lat/lon to real GPS coordinates requires history of previous packets,
+        // but we can print the raw encoded values here.
+        // Ensure it is a DF17 packet BEFORE checking the metype
+        if (mm->msgtype == 17 && mm->metype >= 9 && mm->metype <= 18) {
+            printf("   Raw CPR Lat  : %d\n", mm->raw_latitude);
+            printf("   Raw CPR Lon  : %d\n", mm->raw_longitude);
+        }
+
+        // Print the Squawk Code (Identity)
+        // Squawk codes are printed in octal format, hence the %04x (or %04o depending on libmodes' internal math)
+        // Actually, libmodes conveniently converts it to base-10 so we can print it directly as %04d
+        if (mm->identity != 0) {
+            printf("   Squawk       : %04d\n", mm->identity);
+        }
+
+        printf("=========================================================\n\n");
     }
-
-    // Extract the 24-bit ICAO address (The unique hardware ID of the plane)
-    uint32_t icao = (mm->aa1 << 16) | (mm->aa2 << 8) | mm->aa3;
-
-    printf("=========================================================\n");
-    printf("✈  ICAO Address : %06X\n", icao);
-    
-    if (mm->msgtype == 17) {
-        printf("   Message Type : DF17 (Extended Type: %d)\n", mm->metype);
-    } else {
-        printf("   Message Type : DF%d\n", mm->msgtype);
-    }
-
-    // Print the Flight Callsign (e.g., "RYR1234") if available
-    // (Only transmitted in specific DF17 messages)
-    if (mm->flight[0] != '\0') {
-        printf("   Callsign     : %s\n", mm->flight);
-    }
-
-    // Print the Altitude
-    if (mm->altitude != 0) {
-        printf("   Altitude     : %d feet\n", mm->altitude);
-    }
-
-    // Print the Velocity and Heading
-    if (mm->velocity != 0) {
-        printf("   Speed        : %d knots\n", mm->velocity);
-        printf("   Heading      : %d degrees\n", (int)mm->heading);
-        printf("   Vert. Rate   : %d ft/min\n", mm->vert_rate * 64); 
-    }
-
-    // Print Raw GPS Coordinates
-    // Note: ADS-B uses CPR (Compact Position Reporting). 
-    // Converting raw lat/lon to real GPS coordinates requires history of previous packets,
-    // but we can print the raw encoded values here.
-    // Ensure it is a DF17 packet BEFORE checking the metype
-    if (mm->msgtype == 17 && mm->metype >= 9 && mm->metype <= 18) {
-        printf("   Raw CPR Lat  : %d\n", mm->raw_latitude);
-        printf("   Raw CPR Lon  : %d\n", mm->raw_longitude);
-    }
-
-    // Print the Squawk Code (Identity)
-    // Squawk codes are printed in octal format, hence the %04x (or %04o depending on libmodes' internal math)
-    // Actually, libmodes conveniently converts it to base-10 so we can print it directly as %04d
-    if (mm->identity != 0) {
-        printf("   Squawk       : %04d\n", mm->identity);
-    }
-
-    printf("=========================================================\n\n");
 
     // Clear the message state so the next iteration of mode_s_detect 
     // starts with a clean slate, without modifying third-party code.

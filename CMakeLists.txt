@@ -17,6 +17,7 @@ add_library(modes_static STATIC
 
 # Tell the compiler where to find "mode-s.h" so your src/ code can #include it
 target_include_directories(modes_static PUBLIC third_party/libmodes)
+target_link_libraries(modes_static PRIVATE m)
 
 # 3. Compile Your Application
 add_executable(adsb_rx
@@ -41,7 +42,6 @@ target_compile_options(adsb_rx PRIVATE
 target_link_libraries(adsb_rx 
     PRIVATE 
     ${UHD_LIBRARIES} 
-    Threads::Threads 
-    m 
+    Threads::Threads
     modes_static
 )

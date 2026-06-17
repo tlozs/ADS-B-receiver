@@ -76,7 +76,7 @@ void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
     printf("=========================================================\n\n");
 }
 
-void do_decode(decode_ctx_t* ctx, ring_buffer_t **rb, volatile sig_atomic_t *keep_running) {
+void do_decode(decode_ctx_t* ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
 
     while (*keep_running) {
         // Acquire read pointer from the ring buffer

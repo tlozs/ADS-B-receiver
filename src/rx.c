@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define EXECUTE_OR_GOTO(label, ...) \
     if (__VA_ARGS__) {              \
@@ -80,7 +81,7 @@ int init_usrp(rx_ctx_t *ctx) {
     EXECUTE_OR_GOTO(free_rx_metadata, uhd_rx_streamer_max_num_samps(ctx->rx_streamer, &ctx->samps_per_buff))
     fprintf(stderr, "Buffer size in samples: %zu\n", ctx->samps_per_buff);
 
-    // If we make it here, setup was successful. Exit the function.
+    ctx->trash_buffer = malloc(ctx->samps_per_buff * 2 * sizeof(int16_t));
     return 0;
     
 free_rx_metadata:
@@ -106,6 +107,7 @@ void teardown_usrp(rx_ctx_t *ctx) {
 
     if (ctx->verbose) fprintf(stderr, "Tearing down SDR hardware...\n");
     
+    if (ctx->trash_buffer) free(ctx->trash_buffer);
     if (ctx->md) uhd_rx_metadata_free(&ctx->md);
     if (ctx->rx_streamer) uhd_rx_streamer_free(&ctx->rx_streamer);
     if (ctx->usrp) uhd_usrp_free(&ctx->usrp);
@@ -124,9 +126,24 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
     }
     
     while (*keep_running) {
-        // Acquire write pointer from the ring buffer
-        int16_t* buff = ring_buffer_acquire_write(rb)->data;
-        void** buffs_ptr = (void**)&buff;
+        // 1. Attempt to acquire the ring buffer
+        iq_samps_block_t* block = ring_buffer_acquire_write(rb);
+        int16_t* target_buff = NULL;
+        bool dropping_packet = false;
+        
+        // 2. Route the data depending on buffer state
+        if (!block) {
+            // Buffer is full! Route the incoming radio waves to /dev/null
+            target_buff = ctx->trash_buffer;
+            dropping_packet = true;
+            fprintf(stderr, "WARN: Ring buffer overrun! Dropping packet.\n");
+        } else {
+            // Buffer is good! Route the incoming radio waves to shared memory
+            target_buff = block->data;
+        }
+
+        // 3. Set up the pointer array for UHD
+        void* buffs_ptr[1] = { target_buff };
 
         size_t num_rx_samps = 0;
         
@@ -137,7 +154,10 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
         }
         
         // Commit the written samples for the consumer to read
-        ring_buffer_commit_write(rb, num_rx_samps);
+        // Only commit the data if we didn't throw it in the trash
+        if (!dropping_packet) {
+            ring_buffer_commit_write(rb, num_rx_samps);
+        }
 
         // Error handling
         uhd_rx_metadata_error_code_t error_code;
@@ -161,7 +181,7 @@ typedef struct {
 } rx_thread_args_t;
 
 // 2. The unpacker function is explicitly marked 'static' so it is locked to this file
-static void* decode_thread_func(void* arg) {
+static void* rx_thread_func(void* arg) {
     rx_thread_args_t* args = (rx_thread_args_t*)arg;
     
     // Execute the clean, symmetric function
@@ -184,7 +204,7 @@ pthread_t spawn_rx_thread(rx_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_
     args->keep_running = keep_running;
 
     pthread_t thread;
-    if (pthread_create(&thread, NULL, decode_thread_func, args) != 0) {
+    if (pthread_create(&thread, NULL, rx_thread_func, args) != 0) {
         fprintf(stderr, "Failed to spawn rx thread.\n");
         free(args);
         return 0; // Return a null-equivalent thread ID on failure

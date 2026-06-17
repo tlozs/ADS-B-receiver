@@ -6,15 +6,21 @@
 #include <stddef.h>
 #include <signal.h>
 
+// Context neccesairy for decoding data from the ring buffer.
 typedef struct {
     mode_s_t* mode_s;
-    ring_buffer_t* rb;
     size_t samps_per_buff;
-    volatile sig_atomic_t *keep_running;
     uint8_t* buff_downsampled;
     uint16_t* mag;
 } decode_ctx_t;
 
-void init_decode(decode_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t *keep_running);
-void do_decode(decode_ctx_t* ctx);
+// Sets up the context data, allocating memory for mode_s and the decode buffers.
+void init_decode(decode_ctx_t* ctx, size_t samps_per_buff);
+
+// Clears up the context data from memory.
 void teardown_decode(decode_ctx_t* ctx);
+
+// Starts decoding data from the ring buffer.
+void do_decode(decode_ctx_t* ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running);
+
+pthread_t spawn_decode_thread(decode_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t* keep_running);

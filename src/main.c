@@ -16,32 +16,26 @@ void handle_sigint(int dummy) {
     keep_running = 0; 
 }
 
-// POSIX threads require a void* function signature.
-// This wrapper casts the argument back to our context struct and launches the loop.
-void* decode_thread_func(void* arg) {
-    decode_ctx_t* ctx = (decode_ctx_t*)arg;
-    do_decode(ctx);
-    return NULL;
-}
-
 int main() {
     // Catch Ctrl+C, termination requests from systemctl or kill, and terminal closures
     signal(SIGINT, handle_sigint);
     signal(SIGTERM, handle_sigint);
     signal(SIGHUP, handle_sigint);
 
-    // Initialize rx streamer context and the ring buffer
+    // Initialize rx streamer context
     rx_ctx_t rx_ctx;
     if (init_usrp(&rx_ctx) != EXIT_SUCCESS) return EXIT_FAILURE;
-    ring_buffer_t *rb = ring_buffer_create(rx_ctx.samps_per_buff);
-
+    
     // Initialize decode context
     decode_ctx_t decode_ctx;
-    init_decode(&decode_ctx, rb, &keep_running);
-
-    // Spawn the decode thread
-    pthread_t decode_thread;
-    if (pthread_create(&decode_thread, NULL, decode_thread_func, &decode_ctx) != 0) {
+    init_decode(&decode_ctx, rx_ctx.samps_per_buff);
+    
+    // Initialize ring buffer
+    ring_buffer_t* rb = ring_buffer_create(rx_ctx.samps_per_buff);
+    
+    // Spawn the thread using our clean factory function
+    pthread_t decode_thread = spawn_decode_thread(&decode_ctx, rb, &keep_running);
+    if (decode_thread == 0) {
         fprintf(stderr, "Failed to spawn decode thread.\n");
         teardown_decode(&decode_ctx);
         teardown_usrp(&rx_ctx);
@@ -49,13 +43,21 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    // Start receiving data
-    do_rx_stream(&rx_ctx, rb, &keep_running);
+    // Spawn the thread using our clean factory function
+    pthread_t rx_thread = spawn_rx_thread(&rx_ctx, rb, &keep_running);
+    if (rx_thread == 0) {
+        fprintf(stderr, "Failed to spawn rx thread.\n");
+        teardown_decode(&decode_ctx);
+        teardown_usrp(&rx_ctx);
+        ring_buffer_destroy(rb);
+        return EXIT_FAILURE;
+    }
 
     fprintf(stderr, "\nInitiating safe shutdown...\n");
     
-    // Wait for the decode thread to finish its loop
+    // Wait for the decode and rx thread to finish its loop
     pthread_join(decode_thread, NULL);
+    pthread_join(rx_thread, NULL);
 
     // Free all allocated memory
     teardown_decode(&decode_ctx);

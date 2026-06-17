@@ -13,10 +13,8 @@ void convert_sc16_to_u8(const int16_t *restrict src, uint8_t *restrict dest, siz
     }
 }
 
-void init_decode(decode_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t *keep_running) {
-    ctx->rb = rb;
-    ctx->samps_per_buff = rb->samps_per_block;
-    ctx->keep_running = keep_running;
+void init_decode(decode_ctx_t* ctx, size_t samps_per_buff) {
+    ctx->samps_per_buff = samps_per_buff;
 
     ctx->buff_downsampled = malloc(ctx->samps_per_buff * 2 * sizeof(uint8_t));
     ctx->mag = calloc((ctx->samps_per_buff + OVERLAP_SAMPLES), sizeof(uint16_t));
@@ -36,37 +34,37 @@ void teardown_decode(decode_ctx_t* ctx) {
 void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
     (void)mode_s; // Suppress unused warning
 
-    // 1. Drop the packet if the checksum is broken
+    // Drop the packet if the checksum is broken
     if (!mm->crcok) {
         return; 
     }
 
-    // 2. Extract the 24-bit ICAO address (The unique hardware ID of the plane)
+    // Extract the 24-bit ICAO address (The unique hardware ID of the plane)
     uint32_t icao = (mm->aa1 << 16) | (mm->aa2 << 8) | mm->aa3;
 
     printf("=========================================================\n");
     printf("✈  ICAO Address : %06X\n", icao);
     printf("   Message Type : DF%d\n", mm->msgtype);
 
-    // 3. Print the Flight Callsign (e.g., "RYR1234") if available
+    // Print the Flight Callsign (e.g., "RYR1234") if available
     // (Only transmitted in specific DF17 messages)
     if (mm->flight[0] != '\0') {
         printf("   Callsign     : %s\n", mm->flight);
     }
 
-    // 4. Print the Altitude
+    // Print the Altitude
     if (mm->altitude != 0) {
         printf("   Altitude     : %d feet\n", mm->altitude);
     }
 
-    // 5. Print the Velocity and Heading
+    // Print the Velocity and Heading
     if (mm->velocity != 0) {
         printf("   Speed        : %d knots\n", mm->velocity);
         printf("   Heading      : %d degrees\n", (int)mm->heading);
         printf("   Vert. Rate   : %d ft/min\n", mm->vert_rate * 64); 
     }
 
-    // 6. Print Raw GPS Coordinates
+    // Print Raw GPS Coordinates
     // Note: ADS-B uses CPR (Compact Position Reporting). 
     // Converting raw lat/lon to real GPS coordinates requires history of previous packets,
     // but we can print the raw encoded values here.
@@ -78,17 +76,17 @@ void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
     printf("=========================================================\n\n");
 }
 
-void do_decode(decode_ctx_t* ctx) {
+void do_decode(decode_ctx_t* ctx, ring_buffer_t **rb, volatile sig_atomic_t *keep_running) {
 
-    while (*(ctx->keep_running)) {
+    while (*keep_running) {
         // Acquire read pointer from the ring buffer
-        int16_t* buff = ring_buffer_acquire_read(ctx->rb)->data;
+        int16_t* buff = ring_buffer_acquire_read(rb)->data;
 
         // Downsample sc16 values to u8 expected by the complex->mag conversion
         convert_sc16_to_u8(buff, ctx->buff_downsampled, ctx->samps_per_buff * 2);
         
         // Commit the read to free up buffer space asap
-        ring_buffer_commit_read(ctx->rb);
+        ring_buffer_commit_read(rb);
 
         // Perform the complex->mag conversion
         mode_s_compute_magnitude_vector(ctx->buff_downsampled, ctx->mag + OVERLAP_SAMPLES, ctx->samps_per_buff * 2);
@@ -101,4 +99,48 @@ void do_decode(decode_ctx_t* ctx) {
         // is strangely smaller than 240 and the memory regions overlap
         memmove(ctx->mag, ctx->mag + ctx->samps_per_buff, OVERLAP_SAMPLES * sizeof(uint16_t));
     }
+}
+
+// ============================================================================
+// Thread Spawning Infrastructure (Hidden from main.c)
+// ============================================================================
+
+// 1. The ugly wrapper is now a private implementation detail
+typedef struct {
+    decode_ctx_t* ctx;
+    ring_buffer_t* rb;
+    volatile sig_atomic_t* keep_running;
+} decode_thread_args_t;
+
+// 2. The unpacker function is explicitly marked 'static' so it is locked to this file
+static void* decode_thread_func(void* arg) {
+    decode_thread_args_t* args = (decode_thread_args_t*)arg;
+    
+    // Execute the clean, symmetric function
+    do_decode(args->ctx, args->rb, args->keep_running);
+    
+    // Free the transport vehicle now that the thread has safely started
+    free(args);
+    return NULL;
+}
+
+// 3. The Factory Function
+pthread_t spawn_decode_thread(decode_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t* keep_running) {
+    
+    // CRITICAL: We must malloc the arguments. If we just created this struct 
+    // normally on the stack, it would get destroyed the moment this function 
+    // returns, and the new thread would wake up and read corrupted garbage memory!
+    decode_thread_args_t* args = malloc(sizeof(decode_thread_args_t));
+    args->ctx = ctx;
+    args->rb = rb;
+    args->keep_running = keep_running;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, decode_thread_func, args) != 0) {
+        fprintf(stderr, "Failed to spawn decode thread.\n");
+        free(args);
+        return 0; // Return a null-equivalent thread ID on failure
+    }
+
+    return thread;
 }

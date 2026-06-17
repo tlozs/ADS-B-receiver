@@ -148,3 +148,47 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
         }
     }
 }
+
+// ============================================================================
+// Thread Spawning Infrastructure (Hidden from main.c)
+// ============================================================================
+
+// 1. The ugly wrapper is now a private implementation detail
+typedef struct {
+    rx_ctx_t* ctx;
+    ring_buffer_t* rb;
+    volatile sig_atomic_t* keep_running;
+} rx_thread_args_t;
+
+// 2. The unpacker function is explicitly marked 'static' so it is locked to this file
+static void* decode_thread_func(void* arg) {
+    rx_thread_args_t* args = (rx_thread_args_t*)arg;
+    
+    // Execute the clean, symmetric function
+    do_rx_stream(args->ctx, args->rb, args->keep_running);
+    
+    // Free the transport vehicle now that the thread has safely started
+    free(args);
+    return NULL;
+}
+
+// 3. The Factory Function
+pthread_t spawn_rx_thread(rx_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t* keep_running) {
+    
+    // CRITICAL: We must malloc the arguments. If we just created this struct 
+    // normally on the stack, it would get destroyed the moment this function 
+    // returns, and the new thread would wake up and read corrupted garbage memory!
+    rx_thread_args_t* args = malloc(sizeof(rx_thread_args_t));
+    args->ctx = ctx;
+    args->rb = rb;
+    args->keep_running = keep_running;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, decode_thread_func, args) != 0) {
+        fprintf(stderr, "Failed to spawn rx thread.\n");
+        free(args);
+        return 0; // Return a null-equivalent thread ID on failure
+    }
+
+    return thread;
+}

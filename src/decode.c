@@ -68,7 +68,8 @@ void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
     // Note: ADS-B uses CPR (Compact Position Reporting). 
     // Converting raw lat/lon to real GPS coordinates requires history of previous packets,
     // but we can print the raw encoded values here.
-    if (mm->metype >= 9 && mm->metype <= 18) {
+    // Ensure it is a DF17 packet BEFORE checking the metype
+    if (mm->msgtype == 17 && mm->metype >= 9 && mm->metype <= 18) {
         printf("   Raw CPR Lat  : %d\n", mm->raw_latitude);
         printf("   Raw CPR Lon  : %d\n", mm->raw_longitude);
     }

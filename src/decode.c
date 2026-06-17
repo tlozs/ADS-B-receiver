@@ -44,7 +44,12 @@ void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
 
     printf("=========================================================\n");
     printf("✈  ICAO Address : %06X\n", icao);
-    printf("   Message Type : DF%d\n", mm->msgtype);
+    
+    if (mm->msgtype == 17) {
+        printf("   Message Type : DF17 (Extended Type: %d)\n", mm->metype);
+    } else {
+        printf("   Message Type : DF%d\n", mm->msgtype);
+    }
 
     // Print the Flight Callsign (e.g., "RYR1234") if available
     // (Only transmitted in specific DF17 messages)

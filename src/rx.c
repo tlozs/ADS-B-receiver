@@ -113,6 +113,8 @@ void teardown_usrp(rx_ctx_t *ctx) {
     if (ctx->usrp) uhd_usrp_free(&ctx->usrp);
 }
 
+// Issues a stream command to the SDR and starts to receive data into the ring buffer
+// until keep_running remains true.
 void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
     uhd_stream_cmd_t stream_cmd = {
         .stream_mode = UHD_STREAM_MODE_START_CONTINUOUS,
@@ -126,14 +128,14 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
     }
     
     while (*keep_running) {
-        // 1. Attempt to acquire the ring buffer
+        // Attempt to acquire the ring buffer
         iq_samps_block_t* block = ring_buffer_acquire_write(rb);
         int16_t* target_buff = NULL;
         bool dropping_packet = false;
         
-        // 2. Route the data depending on buffer state
+        // Route the data depending on buffer state
         if (!block) {
-            // Buffer is full! Route the incoming radio waves to /dev/null
+            // Buffer is full! Route the incoming radio waves to the trash
             target_buff = ctx->trash_buffer;
             dropping_packet = true;
             fprintf(stderr, "WARN: Ring buffer overrun! Dropping packet.\n");
@@ -142,9 +144,8 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
             target_buff = block->data;
         }
 
-        // 3. Set up the pointer array for UHD
+        // Set up the pointer array for UHD
         void* buffs_ptr[1] = { target_buff };
-
         size_t num_rx_samps = 0;
         
         // Receive directly into the shared memory
@@ -170,34 +171,27 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
 }
 
 // ============================================================================
-// Thread Spawning Infrastructure (Hidden from main.c)
+// Thread Spawning Infrastructure
 // ============================================================================
 
-// 1. The ugly wrapper is now a private implementation detail
+// An ugly payload struct, because pthread_create only accepts void* args
 typedef struct {
     rx_ctx_t* ctx;
     ring_buffer_t* rb;
     volatile sig_atomic_t* keep_running;
 } rx_thread_args_t;
 
-// 2. The unpacker function is explicitly marked 'static' so it is locked to this file
+// The unpacker function to call do_rx_stream with the correct arguments.
+// It is explicitly marked 'static' so it is locked to this file.
 static void* rx_thread_func(void* arg) {
     rx_thread_args_t* args = (rx_thread_args_t*)arg;
-    
-    // Execute the clean, symmetric function
     do_rx_stream(args->ctx, args->rb, args->keep_running);
-    
-    // Free the transport vehicle now that the thread has safely started
     free(args);
     return NULL;
 }
 
-// 3. The Factory Function
 pthread_t spawn_rx_thread(rx_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t* keep_running) {
-    
-    // CRITICAL: We must malloc the arguments. If we just created this struct 
-    // normally on the stack, it would get destroyed the moment this function 
-    // returns, and the new thread would wake up and read corrupted garbage memory!
+    // malloc is needed for the payload to survive the stack cleanup
     rx_thread_args_t* args = malloc(sizeof(rx_thread_args_t));
     args->ctx = ctx;
     args->rb = rb;
@@ -207,8 +201,8 @@ pthread_t spawn_rx_thread(rx_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_
     if (pthread_create(&thread, NULL, rx_thread_func, args) != 0) {
         fprintf(stderr, "Failed to spawn rx thread.\n");
         free(args);
-        return 0; // Return a null-equivalent thread ID on failure
+        // Return a null-equivalent thread ID on failure
+        return 0;
     }
-
     return thread;
 }

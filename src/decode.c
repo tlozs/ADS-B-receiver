@@ -93,18 +93,17 @@ void on_message(mode_s_t* mode_s, struct mode_s_msg* mm) {
     memset(mm, 0, sizeof(struct mode_s_msg));
 }
 
+// Starts decoding data from the ring buffer until keep_running remains true.
 void do_decode(decode_ctx_t* ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
 
     while (*keep_running) {
         // Safely acquire the block
         iq_samps_block_t* block = ring_buffer_acquire_read(rb);
         
-        // Check for the abort signal
-        if (!block) {
-            break; // Exit the loop so the thread can terminate gracefully
-        }
+        // Check for the abort signal to exit the loop so the thread can terminate gracefully
+        if (!block) break;
 
-        // 3. Extract the data safely
+        // Extract the data safely
         int16_t* buff = block->data;
 
         // Downsample sc16 values to u8 expected by the complex->mag conversion
@@ -127,34 +126,27 @@ void do_decode(decode_ctx_t* ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep
 }
 
 // ============================================================================
-// Thread Spawning Infrastructure (Hidden from main.c)
+// Thread Spawning Infrastructure
 // ============================================================================
 
-// 1. The ugly wrapper is now a private implementation detail
+// An ugly payload struct, because pthread_create only accepts void* args
 typedef struct {
     decode_ctx_t* ctx;
     ring_buffer_t* rb;
     volatile sig_atomic_t* keep_running;
 } decode_thread_args_t;
 
-// 2. The unpacker function is explicitly marked 'static' so it is locked to this file
+// The unpacker function to call do_rx_stream with the correct arguments.
+// It is explicitly marked 'static' so it is locked to this file.
 static void* decode_thread_func(void* arg) {
     decode_thread_args_t* args = (decode_thread_args_t*)arg;
-    
-    // Execute the clean, symmetric function
     do_decode(args->ctx, args->rb, args->keep_running);
-    
-    // Free the transport vehicle now that the thread has safely started
     free(args);
     return NULL;
 }
 
-// 3. The Factory Function
 pthread_t spawn_decode_thread(decode_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t* keep_running) {
-    
-    // CRITICAL: We must malloc the arguments. If we just created this struct 
-    // normally on the stack, it would get destroyed the moment this function 
-    // returns, and the new thread would wake up and read corrupted garbage memory!
+    // malloc is needed for the payload to survive the stack cleanup
     decode_thread_args_t* args = malloc(sizeof(decode_thread_args_t));
     args->ctx = ctx;
     args->rb = rb;
@@ -164,8 +156,8 @@ pthread_t spawn_decode_thread(decode_ctx_t* ctx, ring_buffer_t* rb, volatile sig
     if (pthread_create(&thread, NULL, decode_thread_func, args) != 0) {
         fprintf(stderr, "Failed to spawn decode thread.\n");
         free(args);
-        return 0; // Return a null-equivalent thread ID on failure
+        // Return a null-equivalent thread ID on failure
+        return 0;
     }
-
     return thread;
 }

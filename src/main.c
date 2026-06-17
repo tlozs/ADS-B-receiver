@@ -16,6 +16,12 @@ void handle_sigint(int dummy) {
     keep_running = 0; 
 }
 
+void memory_clearup(decode_ctx_t *decode_ctx, rx_ctx_t *rx_ctx, ring_buffer_t *rb) {
+    teardown_decode(decode_ctx);
+    teardown_usrp(rx_ctx);
+    ring_buffer_destroy(rb);
+}
+
 int main() {
     // Catch Ctrl+C, termination requests from systemctl or kill, and terminal closures
     signal(SIGINT, handle_sigint);
@@ -37,9 +43,7 @@ int main() {
     pthread_t decode_thread = spawn_decode_thread(&decode_ctx, rb, &keep_running);
     if (decode_thread == 0) {
         fprintf(stderr, "Failed to spawn decode thread.\n");
-        teardown_decode(&decode_ctx);
-        teardown_usrp(&rx_ctx);
-        ring_buffer_destroy(rb);
+        memory_clearup(&decode_ctx, &rx_ctx, rb);
         return EXIT_FAILURE;
     }
 
@@ -47,9 +51,7 @@ int main() {
     pthread_t rx_thread = spawn_rx_thread(&rx_ctx, rb, &keep_running);
     if (rx_thread == 0) {
         fprintf(stderr, "Failed to spawn rx thread.\n");
-        teardown_decode(&decode_ctx);
-        teardown_usrp(&rx_ctx);
-        ring_buffer_destroy(rb);
+        memory_clearup(&decode_ctx, &rx_ctx, rb);
         return EXIT_FAILURE;
     }
 
@@ -63,16 +65,13 @@ int main() {
 
     fprintf(stderr, "\nInitiating safe shutdown...\n");
 
-    ring_buffer_abort(rb);
-    
     // Wait for the decode and rx thread to finish its loop
+    ring_buffer_abort(rb);
     pthread_join(decode_thread, NULL);
     pthread_join(rx_thread, NULL);
 
     // Free all allocated memory
-    teardown_decode(&decode_ctx);
-    teardown_usrp(&rx_ctx);
-    ring_buffer_destroy(rb);
+    memory_clearup(&decode_ctx, &rx_ctx, rb);
 
     return EXIT_SUCCESS;
 }

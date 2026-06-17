@@ -22,6 +22,7 @@ typedef struct {
 // - The buffer of buffers, holding blocks of IQ data.
 // - The buffer size of each block.
 // - The mutex and condition variable neccesairy for producer-consumer multithreading.
+// - A shutdown flag to gracefully exit the thread.
 // - Keeps track of read and write indexes.
 typedef struct {
     iq_samps_block_t ring[BLOCK_COUNT];
@@ -53,4 +54,5 @@ iq_samps_block_t* ring_buffer_acquire_read(ring_buffer_t *rb);
 // This function has to be used after calling ring_buffer_acquire_read first.
 void ring_buffer_commit_read(ring_buffer_t *rb);
 
+// Sends a shutdown signal to all threads waiting, waking them up.
 void ring_buffer_abort(ring_buffer_t *rb);

@@ -22,7 +22,6 @@ int init_usrp(rx_ctx_t *ctx);
 // Clears up the context data from memory.
 void teardown_usrp(rx_ctx_t *ctx);
 
-// Issues a stream command to the SDR and starts to receive data into the ring buffer until keep_running remains true.
-void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running);
-
+// Acts as a wrapper function for do_rx_stream, spawning it in its own dedicated thread.
+// Hides the ugly payload crafting and wrapper function of the thread creation logic.
 pthread_t spawn_rx_thread(rx_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t* keep_running);

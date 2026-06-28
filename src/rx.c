@@ -78,7 +78,7 @@ int init_usrp(rx_ctx_t *ctx) {
     EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_stream(ctx->usrp, &stream_args, ctx->rx_streamer))
     
     // Get the max number of samples to use as a base for buffer size
-    EXECUTE_OR_GOTO(free_rx_metadata, uhd_rx_streamer_max_num_samps(ctx->rx_streamer, &ctx->samps_per_buff))
+    EXECUTE_OR_GOTO(free_rx_metadata, uhd_rx_streamer_max_num_samps(ctx->rx_streamer, &(ctx->samps_per_buff)))
     fprintf(stderr, "Buffer size in samples: %zu\n", ctx->samps_per_buff);
 
     ctx->trash_buffer = malloc(ctx->samps_per_buff * 2 * sizeof(int16_t));
@@ -108,9 +108,9 @@ void teardown_usrp(rx_ctx_t *ctx) {
     if (ctx->verbose) fprintf(stderr, "Tearing down SDR hardware...\n");
     
     if (ctx->trash_buffer) free(ctx->trash_buffer);
-    if (ctx->md) uhd_rx_metadata_free(&ctx->md);
-    if (ctx->rx_streamer) uhd_rx_streamer_free(&ctx->rx_streamer);
-    if (ctx->usrp) uhd_usrp_free(&ctx->usrp);
+    if (ctx->md) uhd_rx_metadata_free(&(ctx->md));
+    if (ctx->rx_streamer) uhd_rx_streamer_free(&(ctx->rx_streamer));
+    if (ctx->usrp) uhd_usrp_free(&(ctx->usrp));
 }
 
 // Issues a stream command to the SDR and starts to receive data into the ring buffer
@@ -149,7 +149,7 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
         size_t num_rx_samps = 0;
         
         // Receive directly into the shared memory
-        if (uhd_rx_streamer_recv(ctx->rx_streamer, buffs_ptr, ctx->samps_per_buff, &ctx->md, 3.0, false, &num_rx_samps) != 0) {
+        if (uhd_rx_streamer_recv(ctx->rx_streamer, buffs_ptr, ctx->samps_per_buff, &(ctx->md), 3.0, false, &num_rx_samps) != 0) {
             fprintf(stderr, "Streamer receive failed.\n");
             break;
         }

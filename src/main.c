@@ -37,7 +37,7 @@ int main() {
     init_decode(&decode_ctx, rx_ctx.samps_per_buff);
     
     // Initialize ring buffer
-    ring_buffer_t* rb = ring_buffer_create(rx_ctx.samps_per_buff);
+    ring_buffer_t *rb = ring_buffer_create(rx_ctx.samps_per_buff);
     
     // Spawn the thread using our clean factory function
     pthread_t decode_thread = spawn_decode_thread(&decode_ctx, rb, &keep_running);

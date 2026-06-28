@@ -129,8 +129,8 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
     
     while (*keep_running) {
         // Attempt to acquire the ring buffer
-        iq_samps_block_t* block = ring_buffer_acquire_write(rb);
-        int16_t* target_buff = NULL;
+        iq_samps_block_t *block = ring_buffer_acquire_write(rb);
+        int16_t *target_buff = NULL;
         bool dropping_packet = false;
         
         // Route the data depending on buffer state
@@ -145,7 +145,7 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
         }
 
         // Set up the pointer array for UHD
-        void* buffs_ptr[1] = { target_buff };
+        void *buffs_ptr[1] = { target_buff };
         size_t num_rx_samps = 0;
         
         // Receive directly into the shared memory
@@ -176,23 +176,23 @@ void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_
 
 // An ugly payload struct, because pthread_create only accepts void* args
 typedef struct {
-    rx_ctx_t* ctx;
-    ring_buffer_t* rb;
-    volatile sig_atomic_t* keep_running;
+    rx_ctx_t *ctx;
+    ring_buffer_t *rb;
+    volatile sig_atomic_t *keep_running;
 } rx_thread_args_t;
 
 // The unpacker function to call do_rx_stream with the correct arguments.
 // It is explicitly marked 'static' so it is locked to this file.
-static void* rx_thread_func(void* arg) {
-    rx_thread_args_t* args = (rx_thread_args_t*)arg;
+static void *rx_thread_func(void *arg) {
+    rx_thread_args_t *args = (rx_thread_args_t*)arg;
     do_rx_stream(args->ctx, args->rb, args->keep_running);
     free(args);
     return NULL;
 }
 
-pthread_t spawn_rx_thread(rx_ctx_t* ctx, ring_buffer_t* rb, volatile sig_atomic_t* keep_running) {
+pthread_t spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
     // malloc is needed for the payload to survive the stack cleanup
-    rx_thread_args_t* args = malloc(sizeof(rx_thread_args_t));
+    rx_thread_args_t *args = malloc(sizeof(rx_thread_args_t));
     args->ctx = ctx;
     args->rb = rb;
     args->keep_running = keep_running;

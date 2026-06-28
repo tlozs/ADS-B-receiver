@@ -35,12 +35,12 @@ typedef struct {
 } ring_buffer_t;
 
 // Constructs the ring buffer, allocating its memory and initializing the mutex and condition variable.
-ring_buffer_t* ring_buffer_create(size_t samps_per_block);
+ring_buffer_t *ring_buffer_create(size_t samps_per_block);
 void ring_buffer_destroy(ring_buffer_t *rb);
 
 // Checks if there is space in the ring buffer.
 // Returns a pointer to the first available block, without marking the block as valid.
-iq_samps_block_t* ring_buffer_acquire_write(ring_buffer_t *rb);
+iq_samps_block_t *ring_buffer_acquire_write(ring_buffer_t *rb);
 
 // Updates the ring buffer metadata after writing to it via the address acquire_write() returned.
 // This function has to be used after calling ring_buffer_acquire_write first.
@@ -48,7 +48,7 @@ void ring_buffer_commit_write(ring_buffer_t *rb, size_t actual_samples);
 
 // Sends the thread to sleep until a valid block is ready to read.
 // Returns a pointer to the next block with valid data inside.
-iq_samps_block_t* ring_buffer_acquire_read(ring_buffer_t *rb);
+iq_samps_block_t *ring_buffer_acquire_read(ring_buffer_t *rb);
 
 // Updates the ring buffer metadata after reading from it via the address acquire_read() returned.
 // This function has to be used after calling ring_buffer_acquire_read first.

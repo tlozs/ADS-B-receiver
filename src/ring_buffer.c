@@ -1,6 +1,6 @@
 #include "ring_buffer.h"
 
-ring_buffer_t* ring_buffer_create(size_t samps_per_block) {    
+ring_buffer_t *ring_buffer_create(size_t samps_per_block) {    
     ring_buffer_t *rb = calloc(1, sizeof(ring_buffer_t));
     if (!rb) return NULL;
 
@@ -35,7 +35,7 @@ void ring_buffer_destroy(ring_buffer_t *rb) {
     free(rb);
 }
 
-iq_samps_block_t* ring_buffer_acquire_write(ring_buffer_t *rb) {
+iq_samps_block_t *ring_buffer_acquire_write(ring_buffer_t *rb) {
     pthread_mutex_lock(&rb->mutex);
     
     // Check if the current block is still being read by the consumer
@@ -65,7 +65,7 @@ void ring_buffer_commit_write(ring_buffer_t *rb, size_t actual_samples) {
     pthread_mutex_unlock(&rb->mutex);
 }
 
-iq_samps_block_t* ring_buffer_acquire_read(ring_buffer_t *rb) {
+iq_samps_block_t *ring_buffer_acquire_read(ring_buffer_t *rb) {
     if (!rb) return NULL;
     pthread_mutex_lock(&rb->mutex);
     

@@ -266,6 +266,15 @@ int brute_force_ap(mode_s_t *self, unsigned char *msg, struct mode_s_msg *mm) {
   return 0;
 }
 
+// IMPLEMENTED: Helper function to convert standard Gray code to binary
+static inline int gray2bin(int gray) {
+    int bin = gray;
+    while (gray >>= 1) {
+        bin ^= gray;
+    }
+    return bin;
+}
+
 // Decode the 13 bit AC altitude field (in DF 20 and others). Returns the
 // altitude, and set 'unit' to either MODE_S_UNIT_METERS or MDOES_UNIT_FEETS.
 int decode_ac13_field(unsigned char *msg, int *unit) {
@@ -284,7 +293,48 @@ int decode_ac13_field(unsigned char *msg, int *unit) {
       // 25, minus 1000.
       return n*25-1000;
     } else {
-      // TODO: Implement altitude where Q=0 and M=0
+      // IMPLEMENTED: Altitude where Q=0 and M=0 (100 ft increments / Gillham Code)
+      
+      // Extract bits from the sequence: C1|A1|C2|A2|C4|A4|M|B1|Q|B2|D2|B4|D4
+      int c1 = (msg[2] & 0x10) >> 4;
+      int a1 = (msg[2] & 0x08) >> 3;
+      int c2 = (msg[2] & 0x04) >> 2;
+      int a2 = (msg[2] & 0x02) >> 1;
+      int c4 = (msg[2] & 0x01);
+      int a4 = (msg[3] & 0x80) >> 7;
+      int b1 = (msg[3] & 0x20) >> 5;
+      int b2 = (msg[3] & 0x08) >> 3;
+      int d2 = (msg[3] & 0x04) >> 2;
+      int b4 = (msg[3] & 0x02) >> 1;
+      int d4 = (msg[3] & 0x01);
+
+      // Rearrange the first eight bits into the sequence D2 D4 A1 A2 A4 B1 B2 B4
+      int n500_gray = (d2 << 7) | (d4 << 6) | (a1 << 5) | (a2 << 4) | (a4 << 3) | (b1 << 2) | (b2 << 1) | b4;
+      
+      // Rearrange the last three bits into the sequence C1 C2 C4
+      int n100_gray = (c1 << 2) | (c2 << 1) | c4;
+
+      // Decode the Gillham-coded counts
+      int n500 = gray2bin(n500_gray);
+      int n100 = gray2bin(n100_gray);
+
+      // Values of N_100 in {0, 5, 6} are invalid
+      if (n100 == 0 || n100 == 5 || n100 == 6) {
+          return 0; 
+      }
+      
+      // N_100 = 7 is remapped to 5
+      if (n100 == 7) {
+          n100 = 5;
+      }
+
+      // When N_500 is odd, N_100 is replaced by 6 - N_100
+      if (n500 % 2 == 1) {
+          n100 = 6 - n100;
+      }
+
+      // Final altitude calculation: h = 500 N_500 + 100 N_100 - 1300
+      return (500 * n500) + (100 * n100) - 1300;
     }
   } else {
     *unit = MODE_S_UNIT_METERS;
@@ -295,7 +345,21 @@ int decode_ac13_field(unsigned char *msg, int *unit) {
 
 // Decode the 12 bit AC altitude field (in DF 17 and others). Returns the
 // altitude or 0 if it can't be decoded.
-int decode_ac12_field(unsigned char *msg, int *unit) {
+// MODIFIED: to include metype parameter to correctly decode GNSS based altitude messages
+int decode_ac12_field(unsigned char *msg, int *unit, int metype) {
+  
+  // GNSS Height (TC 20-22)
+  if (metype >= 20 && metype <= 22) {
+    *unit = MODE_S_UNIT_METERS;
+    
+    // The decimal value of all 12 bits translates into the height
+    // Top 8 bits are msg[5]. Bottom 4 bits are the top half of msg[6].
+    int gnss_alt = (msg[5] << 4) | (msg[6] >> 4);
+    
+    return gnss_alt;
+  }
+  
+  // Barometric Altitude (TC 9-18)
   int q_bit = msg[5] & 1;
 
   if (q_bit) {
@@ -439,11 +503,13 @@ void mode_s_decode(mode_s_t *self, struct mode_s_msg *mm, unsigned char *msg) {
       mm->flight[6] = ais_charset[((msg[9]&15)<<2)|(msg[10]>>6)];
       mm->flight[7] = ais_charset[msg[10]&63];
       mm->flight[8] = '\0';
-    } else if (mm->metype >= 9 && mm->metype <= 18) {
+    } else if ((mm->metype >= 9 && mm->metype <= 18) || (mm->metype >= 20 && mm->metype <= 22)) {
       // Airborne position Message
+      // MODIFIED: Added TC 20-22 to capture GNSS Airborne Position ^
       mm->fflag = msg[6] & (1<<2);
       mm->tflag = msg[6] & (1<<3);
-      mm->altitude = decode_ac12_field(msg, &mm->unit);
+      // MODIFIED: to include metype parameter to match the modified decoding function
+      mm->altitude = decode_ac12_field(msg, &mm->unit, mm->metype);
       mm->raw_latitude = ((msg[6] & 3) << 15) |
                           (msg[7] << 7) |
                           (msg[8] >> 1);
@@ -452,37 +518,93 @@ void mode_s_decode(mode_s_t *self, struct mode_s_msg *mm, unsigned char *msg) {
                            msg[10];
     } else if (mm->metype == 19 && mm->mesub >= 1 && mm->mesub <= 4) {
       // Airborne Velocity Message
-      if (mm->mesub == 1 || mm->mesub == 2) {
-        mm->ew_dir = (msg[5]&4) >> 2;
-        mm->ew_velocity = ((msg[5]&3) << 8) | msg[6];
-        mm->ns_dir = (msg[7]&0x80) >> 7;
-        mm->ns_velocity = ((msg[7]&0x7f) << 3) | ((msg[8]&0xe0) >> 5);
-        mm->vert_rate_source = (msg[8]&0x10) >> 4;
-        mm->vert_rate_sign = (msg[8]&0x8) >> 3;
-        mm->vert_rate = ((msg[8]&7) << 6) | ((msg[9]&0xfc) >> 2);
-        // Compute velocity and angle from the two speed components
-        mm->velocity = sqrt(mm->ns_velocity*mm->ns_velocity+
-                            mm->ew_velocity*mm->ew_velocity);
-        if (mm->velocity) {
-          int ewv = mm->ew_velocity;
-          int nsv = mm->ns_velocity;
-          double heading;
+      // MODIFIED: fixed incomplete and incorrect decoding of the message
 
+      // Vertical Rate (Shared across all 4 subtypes)
+      int vr_raw = ((msg[8]&7) << 6) | ((msg[9]&0xfc) >> 2);
+      mm->vert_rate_source = (msg[8]&0x10) >> 4;
+      mm->vert_rate_sign = (msg[8]&0x8) >> 3;
+      
+      if (vr_raw == 0) {
+        // All zeros means no vertical rate information is available
+        mm->vert_rate = 0; 
+      } else {
+        // Vertical rate is (value - 1) * 64
+        int vr = (vr_raw - 1) * 64;
+        if (mm->vert_rate_sign) {
+          vr *= -1; // Svr=1 means descent
+        }
+        mm->vert_rate = vr;
+      }
+
+      // Speed and Heading/Track Decoding
+      if (mm->mesub == 1 || mm->mesub == 2) {
+        
+        // Subtypes 1 & 2: Ground Speed
+        mm->ew_dir = (msg[5]&4) >> 2;
+        int ew_raw = ((msg[5]&3) << 8) | msg[6];
+        
+        mm->ns_dir = (msg[7]&0x80) >> 7;
+        int ns_raw = ((msg[7]&0x7f) << 3) | ((msg[8]&0xe0) >> 5);
+        
+        if (ew_raw == 0 || ns_raw == 0) {
+          mm->velocity = 0; // Speed information unavailable
+          mm->heading = 0;
+        } else {
+          // Subtract the mandatory 1 offset
+          int ewv = ew_raw - 1;
+          int nsv = ns_raw - 1;
+          
+          // Subtype 2 is Supersonic (4 kt resolution)
+          if (mm->mesub == 2) {
+            ewv *= 4;
+            nsv *= 4;
+          }
+          
+          // Apply North/South/East/West directions
           if (mm->ew_dir) ewv *= -1;
           if (mm->ns_dir) nsv *= -1;
-          heading = atan2(ewv, nsv);
-
-          // Convert to degrees.
-          mm->heading = heading * 360 / (M_PI*2);
-          // We don't want negative values but a 0-360 scale.
+          
+          // Compute actual ground speed
+          mm->velocity = sqrt((nsv * nsv) + (ewv * ewv));
+          
+          // Compute track angle
+          double heading = atan2(ewv, nsv);
+          mm->heading = heading * 360.0 / (M_PI*2.0);
           if (mm->heading < 0) mm->heading += 360;
+        }
+
+      } else if (mm->mesub == 3 || mm->mesub == 4) {
+        
+        // Subtypes 3 & 4: Airspeed and Magnetic Heading
+        mm->heading_is_valid = msg[5] & (1<<2);
+        
+        if (mm->heading_is_valid) {
+          // Extract all 10 bits for HDG (bits 22-31 of the message)
+          int hdg_raw = ((msg[5] & 3) << 8) | msg[6];
+          
+          // Apply the formula from image_dc1102.png
+          mm->heading = hdg_raw * (360.0 / 1024.0);
         } else {
           mm->heading = 0;
         }
-      } else if (mm->mesub == 3 || mm->mesub == 4) {
-        mm->heading_is_valid = msg[5] & (1<<2);
-        mm->heading = (360.0/128) * (((msg[5] & 3) << 5) |
-                                      (msg[6] >> 3));
+        
+        // Extract missing 10-bit airspeed from ME bits 22-31
+        int as_raw = ((msg[6] & 7) << 7) | (msg[7] >> 1);
+        
+        if (as_raw == 0) {
+          mm->velocity = 0; // Airspeed information unavailable
+        } else {
+          int airspeed = as_raw - 1;
+          
+          // Subtype 4 is Supersonic (4 kt resolution)
+          if (mm->mesub == 4) {
+            airspeed *= 4;
+          }
+          
+          // We repurpose the velocity variable to store the airspeed
+          mm->velocity = airspeed; 
+        }
       }
     }
   }
@@ -714,7 +836,8 @@ good_preamble:
     // a Mode S message in our hands, but it may still be broken and CRC
     // may not be correct. This is handled by the next layer.
     if (errors == 0 || (self->aggressive && errors < 3)) {
-      struct mode_s_msg mm;
+      // MODIFIED: initialize fields to 0
+      struct mode_s_msg mm = {0};
 
       // Decode the received message
       mode_s_decode(self, &mm, msg);

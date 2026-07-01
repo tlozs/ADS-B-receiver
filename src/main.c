@@ -1,10 +1,17 @@
 #include "rx.h"
 #include "ring_buffer.h"
+#include "radar_state.h"
 #include "decode.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
+
+// TODO: error handling audit, pointer existence checks
+// TODO: unit tests?
+// TODO: register clearup functions as atexit()?
+
+radar_state_ctx_t *g_radar_ctx = NULL;
 
 // Global shutdown signal flag
 volatile sig_atomic_t keep_running = 1;

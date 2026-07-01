@@ -15,6 +15,10 @@ typedef struct {
 } decode_ctx_t;
 
 // Sets up the context data, allocating memory for mode_s and the decode buffers.
+// Explicitly enforces decoding parameters to:
+// - Drop corrupted packets before the callback
+// - Allow safe 1-bit mathematical repairs
+// - Disable hallucinated noise detection
 void init_decode(decode_ctx_t *ctx, size_t samps_per_buff);
 
 // Clears up the context data from memory.

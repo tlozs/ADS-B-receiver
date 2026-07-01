@@ -115,7 +115,7 @@ void teardown_usrp(rx_ctx_t *ctx) {
 
 // Issues a stream command to the SDR and starts to receive data into the ring buffer
 // until keep_running remains true.
-void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
+static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
     uhd_stream_cmd_t stream_cmd = {
         .stream_mode = UHD_STREAM_MODE_START_CONTINUOUS,
         .stream_now  = true

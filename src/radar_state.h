@@ -1,0 +1,89 @@
+#pragma once
+
+#include <pthread.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+// The size of the aircraft repository.
+#define MAX_AIRCRAFT 1024
+
+// The global pointer to the radar state context, needed inside 'libmodes' on_message callback.
+extern radar_state_ctx_t *g_radar_ctx;
+
+// Stores aircraft data accumulated over multiple decoded ADS-B messages. Contains:
+// - ICAO address for unique identification.
+// - A mutex, flag for tracking state changes and an update timestamp for TTL management.
+// - CPR position data decoded from ADS-B, used to calculate real GPS coordinates.
+// - Flight status data about emergency and identification, determined by a latching logic at readout.
+// - Clean decoded data ready to be sent to the database.
+// IMPORTANT: Time data is not epoch time, it is provided by the monotonic clock.
+typedef struct {
+    uint32_t icao;
+
+    pthread_mutex_t mutex;
+    bool is_dirty;        
+    bool landed;
+    uint64_t last_update_ms;
+
+    int32_t cpr_even_lat, cpr_even_lon;
+    uint64_t cpr_even_time_ms;
+    int32_t cpr_odd_lat, cpr_odd_lon;
+    uint64_t cpr_odd_time_ms;
+    bool last_cpr_is_even;
+
+    uint64_t last_emergency_ms;
+    uint64_t last_ident_ms;
+
+    double lat, lon;
+    int32_t alt_baro;
+    int32_t alt_geom;
+    int32_t velocity_to_ground;
+    int32_t velocity_to_air;
+    int32_t heading;
+    int32_t vert_rate;
+    int32_t squawk;
+    uint8_t wake_vortex_tc;
+    uint8_t wake_vortex_ca;
+    char callsign[9];
+} aircraft_t;
+
+// Context necessary for managing the RAM repository. 
+// An aircraft inside with ICAO = 0 means empty slot.
+typedef struct {
+    aircraft_t repo[MAX_AIRCRAFT];
+    pthread_mutex_t mutex;
+} radar_state_ctx_t;
+
+// Initializes the aircraft repository inside the RAM, ready to get filled.
+void init_radar_state(radar_state_ctx_t *ctx);
+
+// Clears up the aircraft repository from memory. 
+void teardown_radar_state(radar_state_ctx_t *ctx);
+
+// Returns a pointer to the aircraft data inside the RAM repository.
+// If no aircraft is found, then a blank item is returned with specific initial values.
+// A NULL pointer is returned if an error occured or there is no space left in the repository for a new aircraft.
+aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao);
+
+// Returns a pointer to the aircraft data inside the RAM repository.
+// If no aircraft is found, NULL is returned.
+aircraft_t *get_aircraft(radar_state_ctx_t *ctx, uint32_t icao);
+
+void update_aircraft_landed(aircraft_t *ac, bool new_status);
+// Updates aircraft last emergency timestamp.
+void update_aircraft_emergency(aircraft_t *ac);
+// Updates aircraft last ident timestamp.
+void update_aircraft_ident(aircraft_t *ac);
+// Updates aircraft emergency and ident timestamps based on flight status data.
+void update_aircraft_flightstatus(aircraft_t *ac, int32_t fs);
+// Updates aircraft emergency and ident timestamps based on surveillance status data.
+void update_aircraft_survstatus(aircraft_t *ac, int32_t ss);
+// Saves CPR position data and calculates the GPS coordinates if enough data is available.
+void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bool is_even);
+void update_aircraft_altitude(aircraft_t *ac, int32_t alt, int32_t unit, bool is_gnss);
+void update_aircraft_velocity(aircraft_t *ac, int32_t velocity, bool is_to_air, int32_t heading, int32_t vert_rate);
+void update_aircraft_squawk(aircraft_t *ac, int32_t squawk);
+void updata_aircraft_wakevortex(aircraft_t *ac, uint8_t tc, uint8_t ca);
+void update_aircraft_callsign(aircraft_t *ac, const char *callsign);
+
+bool is_aircraft_landed(aircraft_t *ac);

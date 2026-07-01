@@ -25,6 +25,8 @@ add_executable(adsb_rx
     src/rx.c
     src/decode.c
     src/ring_buffer.c
+    src/radar_state.c
+    src/cpr_math.c
 )
 
 # Tell your executable where to find the <uhd.h> header files

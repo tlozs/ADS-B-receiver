@@ -15,23 +15,18 @@
 // - Clean decoded data ready to be sent to the database.
 // IMPORTANT: Time data is not epoch time, it is provided by the monotonic clock.
 typedef struct {
-    uint32_t icao;
-
     pthread_mutex_t mutex;
-    bool is_dirty;        
-    bool landed;
+
     uint64_t last_update_ms;
-
-    int32_t cpr_even_lat, cpr_even_lon;
     uint64_t cpr_even_time_ms;
-    int32_t cpr_odd_lat, cpr_odd_lon;
     uint64_t cpr_odd_time_ms;
-    bool last_cpr_is_even;
-
     uint64_t last_emergency_ms;
     uint64_t last_ident_ms;
-
     double lat, lon;
+    
+    int32_t cpr_even_lat, cpr_even_lon;
+    int32_t cpr_odd_lat, cpr_odd_lon;
+    uint32_t icao;
     int32_t alt_baro;
     int32_t alt_geom;
     int32_t velocity_to_ground;
@@ -39,6 +34,10 @@ typedef struct {
     int32_t heading;
     int32_t vert_rate;
     int32_t squawk;
+    
+    bool is_dirty;        
+    bool landed;
+    bool last_cpr_is_even;
     uint8_t wake_vortex_tc;
     uint8_t wake_vortex_ca;
     char callsign[9];

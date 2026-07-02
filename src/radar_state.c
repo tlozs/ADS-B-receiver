@@ -345,7 +345,7 @@ void updata_aircraft_wakevortex(aircraft_t *ac, uint8_t tc, uint8_t ca) {
     if (!ac) return;
 
     // skip invalid codes
-    if (tc < 0 || 4 < tc || ca < 0 || 7 < ca) return;
+    if (4 < tc || 7 < ca) return;
 
     pthread_mutex_lock(&(ac->mutex));
     

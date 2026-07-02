@@ -7,9 +7,6 @@
 // The size of the aircraft repository.
 #define MAX_AIRCRAFT 1024
 
-// The global pointer to the radar state context, needed inside 'libmodes' on_message callback.
-extern radar_state_ctx_t *g_radar_ctx;
-
 // Stores aircraft data accumulated over multiple decoded ADS-B messages. Contains:
 // - ICAO address for unique identification.
 // - A mutex, flag for tracking state changes and an update timestamp for TTL management.
@@ -53,6 +50,9 @@ typedef struct {
     aircraft_t repo[MAX_AIRCRAFT];
     pthread_mutex_t mutex;
 } radar_state_ctx_t;
+
+// The global pointer to the radar state context, needed inside 'libmodes' on_message callback.
+extern radar_state_ctx_t *g_radar_ctx;
 
 // Initializes the aircraft repository inside the RAM, ready to get filled.
 void init_radar_state(radar_state_ctx_t *ctx);

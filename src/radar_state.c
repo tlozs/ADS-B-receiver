@@ -159,6 +159,51 @@ aircraft_t *get_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
     return NULL;
 }
 
+size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
+    pthread_mutex_lock(&(ctx->mutex));
+
+    aircraft_t *source = ctx->repo;
+    size_t active_count = 0;
+    uint64_t now_ms = get_system_tick_ms();
+
+    for (size_t i = 0; i < MAX_AIRCRAFT; i++) {
+        if (source[i].icao != 0) {
+            aircraft_t *ac = &source[i];
+            
+            pthread_mutex_lock(&(ac->mutex));
+            
+            // Only snapshot aircraft that have recent data
+            // Also check for uninitialized data for every field
+            if (ac->is_dirty) {
+                snapshot[active_count].icao = ac->icao;
+                snapshot[active_count].lat = ac->lat;
+                snapshot[active_count].lon = ac->lon;
+                snapshot[active_count].alt_baro = ac->alt_baro;
+                snapshot[active_count].alt_geom = ac->alt_geom;
+                snapshot[active_count].velocity_to_ground = ac->velocity_to_ground;
+                snapshot[active_count].velocity_to_air = ac->velocity_to_air;
+                snapshot[active_count].heading = ac->heading;
+                snapshot[active_count].vert_rate = ac->vert_rate;
+                snapshot[active_count].squawk = ac->squawk;
+                snapshot[active_count].wake_vortex_tc = ac->wake_vortex_tc;
+                snapshot[active_count].wake_vortex_ca = ac->wake_vortex_ca;
+                strncpy(snapshot[active_count].callsign, ac->callsign, 9);
+                snapshot[active_count].is_emergency = 
+                    now_ms - ac->last_emergency_ms <= STATUS_ALERT_PERSISTENCE;
+                snapshot[active_count].is_ident = 
+                    now_ms - ac->last_ident_ms <= STATUS_IDENT_PERSISTENCE;
+                
+                // Mark as clean so we don't send duplicate static data next second
+                ac->is_dirty = false;
+                active_count++;
+            }
+            pthread_mutex_unlock(&(ac->mutex));
+        }
+    }
+    pthread_mutex_unlock(&(ctx->mutex));
+    return active_count;
+}
+
 void update_aircraft_landed(aircraft_t *ac, bool new_status) {
     if (!ac) return;
 
@@ -267,7 +312,7 @@ void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bo
                     !(final_lat == 0.0 && final_lon == 0.0)) {
 
                     // If previous data is available, perform a 100km distance check
-                    if (ac->lat != 300.0 && ac->lon != 300.0 &&
+                    if (ac->lat == 300.0 || ac->lon == 300.0 ||
                         fast_distance_meters(ac->lat, ac->lon, final_lat, final_lon) < 100000) {
                         ac->lat = final_lat;
                         ac->lon = final_lon;
@@ -341,7 +386,7 @@ void update_aircraft_squawk(aircraft_t *ac, int32_t squawk) {
     pthread_mutex_unlock(&(ac->mutex));
 }
 
-void updata_aircraft_wakevortex(aircraft_t *ac, uint8_t tc, uint8_t ca) {
+void update_aircraft_wakevortex(aircraft_t *ac, uint8_t tc, uint8_t ca) {
     if (!ac) return;
 
     // skip invalid codes

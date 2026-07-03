@@ -7,6 +7,14 @@
 // The size of the aircraft repository.
 #define MAX_AIRCRAFT 1024
 
+// The duration of an alert status in ms. 
+// If the last alert report is older than this threshold, it is no longer exported as an alert.
+#define STATUS_ALERT_PERSISTENCE 2500
+
+// The duration of an ident status in ms. 
+// If the last ident report is older than this threshold, it is no longer exported as an ident.
+#define STATUS_IDENT_PERSISTENCE 18500
+
 // Stores aircraft data accumulated over multiple decoded ADS-B messages. Contains:
 // - ICAO address for unique identification.
 // - A mutex, flag for tracking state changes and an update timestamp for TTL management.
@@ -34,7 +42,7 @@ typedef struct {
     int32_t heading;
     int32_t vert_rate;
     int32_t squawk;
-    
+
     bool is_dirty;        
     bool landed;
     bool last_cpr_is_even;
@@ -43,6 +51,26 @@ typedef struct {
     char callsign[9];
 } aircraft_t;
 
+// The stripped-down version of aircraft_t, only containing data to be exported.
+typedef struct {
+    double lat, lon;
+    
+    uint32_t icao;
+    int32_t alt_baro;
+    int32_t alt_geom;
+    int32_t velocity_to_ground;
+    int32_t velocity_to_air;
+    int32_t heading;
+    int32_t vert_rate;
+    int32_t squawk;
+
+    bool is_emergency;
+    bool is_ident;
+    uint8_t wake_vortex_tc;
+    uint8_t wake_vortex_ca;
+    char callsign[9];
+} aircraft_snapshot_t;
+
 // Context necessary for managing the RAM repository. 
 // An aircraft inside with ICAO = 0 means empty slot.
 typedef struct {
@@ -50,7 +78,7 @@ typedef struct {
     pthread_mutex_t mutex;
 } radar_state_ctx_t;
 
-// The global pointer to the radar state context, needed inside 'libmodes' on_message callback.
+// The global pointer to the radar state context, needed inside the on_message callback.
 extern radar_state_ctx_t *g_radar_ctx;
 
 // Initializes the aircraft repository inside the RAM, ready to get filled.
@@ -68,6 +96,10 @@ aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao);
 // If no aircraft is found, NULL is returned.
 aircraft_t *get_aircraft(radar_state_ctx_t *ctx, uint32_t icao);
 
+// Creates a snapshot of the global aircraft RAM repository defined in ctx.
+// Returns the number of aircrafts saved.
+size_t create_snapshot(radar_state_ctx_t *ctx, aircraft_snapshot_t *snapshot);
+
 void update_aircraft_landed(aircraft_t *ac, bool new_status);
 // Updates aircraft last emergency timestamp.
 void update_aircraft_emergency(aircraft_t *ac);
@@ -82,7 +114,7 @@ void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bo
 void update_aircraft_altitude(aircraft_t *ac, int32_t alt, int32_t unit, bool is_gnss);
 void update_aircraft_velocity(aircraft_t *ac, int32_t velocity, bool is_to_air, int32_t heading, int32_t vert_rate);
 void update_aircraft_squawk(aircraft_t *ac, int32_t squawk);
-void updata_aircraft_wakevortex(aircraft_t *ac, uint8_t tc, uint8_t ca);
+void update_aircraft_wakevortex(aircraft_t *ac, uint8_t tc, uint8_t ca);
 void update_aircraft_callsign(aircraft_t *ac, const char *callsign);
 
 bool is_aircraft_landed(aircraft_t *ac);

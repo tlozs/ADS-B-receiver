@@ -162,7 +162,7 @@ static void on_message(mode_s_t *mode_s, struct mode_s_msg *mm) {
         // Aircraft identification
         if (1 <= mm->metype && mm->metype <= 4) {
             update_aircraft_callsign(ac, mm->flight);
-            updata_aircraft_wakevortex(ac, mm->metype, mm->mesub);
+            update_aircraft_wakevortex(ac, mm->metype, mm->mesub);
         }
         // Airborne position (w/Baro Altitude)
         else if (9 <= mm->metype && mm->metype <= 18) {

@@ -4,19 +4,16 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <signal.h>
 #include <time.h>
 #include <curl/curl.h>
-
-// TODO: link libcurl when compiling?
 
 // example Line Protocol output:
 // aircraft,icao=A1B2C3 lat=48.12345,lon=8.34567,alt_baro=35000i,alt_geom=35200i,velocity_to_ground=450i,velocity_to_air=465i,heading=270i,vert_rate=-1500i,squawk=7700i,wake_vortex_tc=2i,wake_vortex_ca=4i,callsign="RYR123",is_emergency=t,is_ident=t 1719900000
 // 257 characters in total
 
 #define INFLUX_URL "http://localhost:8181/api/v3/write_lp?db=radar&precision=second"
-// TODO: safely acquire the access token
-#define INFLUX_TOKEN ""
 
 // libcurl passes the incoming data here chunk by chunk.
 // We must return the exact number of bytes we were given to tell libcurl we successfully processed them.
@@ -25,6 +22,31 @@ static size_t suppress_output_callback(char *ptr, size_t size, size_t nmemb, voi
     (void)userdata; // Suppress unused warning
     // size * nmemb is the total number of bytes in this chunk
     return size * nmemb;
+}
+
+// Dynamically creates the Authorization header using the OS environment variable.
+// Returns a heap-allocated string that the caller must free.
+static char* create_auth_header_from_env(size_t *header_len) {
+    // Fetch the token from the OS environment block
+    char *raw_token = getenv("INFLUX_TOKEN");
+    size_t raw_token_len = strlen(raw_token);
+    if (!raw_token) {
+        fprintf(stderr, "FATAL: INFLUX_TOKEN environment variable is not set.\n");
+        return NULL;
+    }
+
+    // Allocate memory for the formatted header string
+    const char *prefix = "Authorization: Token ";
+    *header_len = strlen(prefix) + raw_token_len + 1;
+    
+    // Assemble the auth header
+    char *auth_header = malloc(*header_len);
+    if (auth_header)
+        snprintf(auth_header, *header_len, "%s%s", prefix, raw_token);
+
+    // Remove token trace from memory
+    explicit_bzero(raw_token, raw_token_len);
+    return auth_header;
 }
 
 // Constructs a payload string in Line Protocol format from the snapshot data
@@ -134,17 +156,23 @@ static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t cou
     free(payload);
 }
 
-void run_export_loop(radar_state_ctx_t *ctx, sig_atomic_t *keep_running) {
+void run_export_loop(radar_state_ctx_t *ctx, volatile sig_atomic_t *keep_running) {
     if (!ctx) {
         fprintf(stderr, "Radar context does not exist, unable to run the export loop!\n");
         return;
     }
 
+    size_t header_len = 0;
+    char *auth_header = create_auth_header_from_env(&header_len);
+
     // Initialize the network handle once, before the main loop
     CURL *curl = curl_easy_init();
     struct curl_slist *headers = NULL;
     if (curl) {
-        headers = curl_slist_append(headers, INFLUX_TOKEN);
+        headers = curl_slist_append(headers, auth_header);
+        // Remove token trace from memory
+        explicit_bzero(auth_header, header_len);
+        free(auth_header);
         curl_easy_setopt(curl, CURLOPT_URL, INFLUX_URL);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, suppress_output_callback);

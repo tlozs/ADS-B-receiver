@@ -82,7 +82,7 @@ typedef struct {
 extern radar_state_ctx_t *g_radar_ctx;
 
 // Initializes the aircraft repository inside the RAM, ready to get filled.
-void init_radar_state(radar_state_ctx_t *ctx);
+int init_radar_state(radar_state_ctx_t *ctx);
 
 // Clears up the aircraft repository from memory. 
 void teardown_radar_state(radar_state_ctx_t *ctx);
@@ -110,6 +110,7 @@ void update_aircraft_flightstatus(aircraft_t *ac, int32_t fs);
 // Updates aircraft emergency and ident timestamps based on surveillance status data.
 void update_aircraft_survstatus(aircraft_t *ac, int32_t ss);
 // Saves CPR position data and calculates the GPS coordinates if enough data is available.
+// If the new decoded location is more than 100km away from the old one, the GPS coordinates are not updated.
 void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bool is_even);
 void update_aircraft_altitude(aircraft_t *ac, int32_t alt, int32_t unit, bool is_gnss);
 void update_aircraft_velocity(aircraft_t *ac, int32_t velocity, bool is_to_air, int32_t heading, int32_t vert_rate);

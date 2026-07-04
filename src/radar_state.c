@@ -3,10 +3,10 @@
 #include <mode-s.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <ctype.h>
 #include <time.h>
 #include <string.h>
 
+// Retrieves the system uptime in milliseconds.
 static uint64_t get_system_tick_ms() {
     struct timespec ts;
 
@@ -22,9 +22,11 @@ static uint64_t get_system_tick_ms() {
         return (uint64_t)(ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
     }
 
-    // The code wont work, kill the process
-    fprintf(stderr, "FATAL: Monotonic hardware clocks are completely unavailable.\n");
-    exit(EXIT_FAILURE);
+    // If the Linux kernel is so broken it forgets how to tell time, 
+    // log a massive error and return 0. The radar's time deltas will 
+    // be momentarily weird, but the process will not segfault or crash.
+    fprintf(stderr, "CRITICAL: Monotonic hardware clocks are completely unavailable!\n");
+    return 0;
 }
 
 // Checks if the given squawk code is in a valid octal format (does not contain 8 or 9).
@@ -39,12 +41,26 @@ static bool is_valid_squawk(int32_t squawk) {
 }
 
 // True if the given string only contains uppercase characters or digits or space.
-static bool is_valid_callsign(const char *callsign) {
-    for (int i = 0; i < 8 && callsign[i] != '\0'; i++) {
-        char c = callsign[i];
-        if (!isupper(c) && !isdigit(c) && c != ' ')
-            return false;
+bool is_valid_callsign(const char *callsign) {
+    if (!callsign || callsign[0] == '\0') return false;
+
+    int len = 0;
+    while (callsign[len] != '\0') {
+        // Reject overflowing strings
+        if (9 <= len) return false;
+
+        // Locale-independent, memory-safe bounds checking
+        char c = callsign[len];
+        bool is_upper = ('A' <= c && c <= 'Z');
+        bool is_digit = ('0' <= c && c <= '9');
+        bool is_space = (c == ' ');
+
+        if (!is_upper && !is_digit && !is_space) return false;
+
+        len++;
     }
+
+    // If we reach here, the string is 1-8 characters of pure, valid ASCII
     return true;
 }
 
@@ -63,16 +79,24 @@ static double fast_distance_meters(double lat1, double lon1, double lat2, double
     return sqrt(x * x + y * y) * r_earth;
 }
 
-void init_radar_state(radar_state_ctx_t *ctx) {
-    if (!ctx) return;
-    pthread_mutex_init(&(ctx->mutex), NULL);
+int init_radar_state(radar_state_ctx_t *ctx) {
+    if (!ctx) return EXIT_FAILURE;
+    
+    if (pthread_mutex_init(&(ctx->mutex), NULL) != 0)
+        return EXIT_FAILURE;
 
     for (size_t i = 0; i < MAX_AIRCRAFT; i++) {
-        pthread_mutex_init(&(ctx->repo[i].mutex), NULL);
+        if (pthread_mutex_init(&(ctx->repo[i].mutex), NULL) != 0) {
+            // Roll back previously initialized mutexes
+            for (size_t j = 0; j < i; j++)
+                pthread_mutex_destroy(&(ctx->repo[j].mutex));
+            pthread_mutex_destroy(&(ctx->mutex));
+            return EXIT_FAILURE;
+        }
         ctx->repo[i].icao = 0;
     }
-
     precalculate_nl_table();
+    return EXIT_SUCCESS;
 }
 
 void teardown_radar_state(radar_state_ctx_t *ctx) {
@@ -111,6 +135,8 @@ aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
         first_empty_slot->is_dirty = false;
         first_empty_slot->landed = false;
         first_empty_slot->last_update_ms = now_ms;
+        first_empty_slot->last_emergency_ms = 0;
+        first_empty_slot->last_ident_ms = 0;
         
         first_empty_slot->cpr_even_time_ms = 0;
         first_empty_slot->cpr_odd_time_ms = 0;
@@ -261,8 +287,8 @@ void update_aircraft_survstatus(aircraft_t *ac, int32_t ss) {
         update_aircraft_ident(ac);
 }
 
-// TODO: if previous data is available, decode from a single message?
 void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bool is_even) {
+    // TODO: if previous data is available, decode from a single message?
     if (!ac) return;
 
     uint64_t now_ms = get_system_tick_ms();

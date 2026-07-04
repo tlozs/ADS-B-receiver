@@ -12,6 +12,10 @@
 // TODO: error handling audit, pointer existence checks
 // TODO: unit tests?
 
+// TODO: error messages on early return exits?
+// TODO: syntax consistency check
+// TODO: comment style and wording should be professional
+
 radar_state_ctx_t *g_radar_ctx = NULL;
 
 // Global shutdown signal flag
@@ -34,6 +38,8 @@ void memory_clearup(decode_ctx_t *decode_ctx, rx_ctx_t *rx_ctx, ring_buffer_t *r
 }
 
 int main() {
+    int exit_status = EXIT_SUCCESS;
+
     // Catch Ctrl+C, termination requests from systemctl or kill, and terminal closures
     signal(SIGINT, handle_sigint);
     signal(SIGTERM, handle_sigint);
@@ -46,47 +52,61 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    // Initialize rx streamer context
+    // Zero-initialize stack memory so teardown functions don't trip on garbage data
     rx_ctx_t rx_ctx;
-    if (init_usrp(&rx_ctx) != EXIT_SUCCESS) return EXIT_FAILURE;
+    decode_ctx_t decode_ctx;
+    radar_state_ctx_t radar;
+    ring_buffer_t *rb = NULL;
+    pthread_t decode_thread;
+    pthread_t rx_thread;
+    
+    // Initialize rx streamer
+    if (init_usrp(&rx_ctx) != EXIT_SUCCESS) {
+        exit_status = EXIT_FAILURE;
+        goto cleanup_curl;
+    }
     
     // Initialize decode context
-    decode_ctx_t decode_ctx;
-    init_decode(&decode_ctx, rx_ctx.samps_per_buff);
+    if (init_decode(&decode_ctx, rx_ctx.samps_per_buff) != EXIT_SUCCESS) {
+        fprintf(stderr, "Failed to initialize decode context.\n");
+        exit_status = EXIT_FAILURE;
+        goto cleanup_rx;
+    }
     
     // Initialize ring buffer
-    ring_buffer_t *rb = ring_buffer_create(rx_ctx.samps_per_buff);
+    rb = ring_buffer_create(rx_ctx.samps_per_buff);
     if (!rb) {
         fprintf(stderr, "Failed to allocate ring buffer.\n");
-        memory_clearup(&decode_ctx, &rx_ctx, NULL, NULL);
-        curl_global_cleanup();
-        return EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
+        goto cleanup_decode;
     }
 
-    // Initialize radar state context
-    radar_state_ctx_t radar;
-    init_radar_state(&radar);
+    // Initialize radar state
+    if (init_radar_state(&radar) != EXIT_SUCCESS) {
+        fprintf(stderr, "Failed to initialize radar state.\n");
+        exit_status = EXIT_FAILURE;
+        goto cleanup_rb;
+    }
     g_radar_ctx = &radar;
     
     // Spawn the decode thread
-    pthread_t decode_thread = spawn_decode_thread(&decode_ctx, rb, &keep_running);
-    if (decode_thread == 0) {
+    if (spawn_decode_thread(&decode_ctx, rb, &keep_running, &decode_thread) != EXIT_SUCCESS) {
         fprintf(stderr, "Failed to spawn decode thread.\n");
-        memory_clearup(&decode_ctx, &rx_ctx, rb, &radar);
-        return EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
+        goto cleanup_radar;
     }
 
     // Spawn the receiver thread
-    pthread_t rx_thread = spawn_rx_thread(&rx_ctx, rb, &keep_running);
-    if (rx_thread == 0) {
+    if (spawn_rx_thread(&rx_ctx, rb, &keep_running, &rx_thread) != EXIT_SUCCESS) {
         fprintf(stderr, "Failed to spawn rx thread.\n");
-
+        
+        // Safely shut down the decode thread that is already running
         keep_running = 0;
         ring_buffer_abort(rb);
         pthread_join(decode_thread, NULL);
-
-        memory_clearup(&decode_ctx, &rx_ctx, rb, &radar);
-        return EXIT_FAILURE;
+        
+        exit_status = EXIT_FAILURE;
+        goto cleanup_radar;
     }
 
     fprintf(stderr, "\n✈ Radar is LIVE. Listening for ADS-B packets. Press Ctrl+C to stop...\n\n");
@@ -95,13 +115,22 @@ int main() {
 
     fprintf(stderr, "\nInitiating safe shutdown...\n");
 
-    // Wait for the decode and rx thread to finish its loop
+    // Normal shutdown path: wait for threads to finish
     ring_buffer_abort(rb);
     pthread_join(decode_thread, NULL);
     pthread_join(rx_thread, NULL);
 
-    // Free all allocated memory
-    memory_clearup(&decode_ctx, &rx_ctx, rb, &radar);
+    // Cascading Cleanup Sequence
+cleanup_radar:
+    teardown_radar_state(&radar);
+cleanup_rb:
+    ring_buffer_destroy(rb);
+cleanup_decode:
+    teardown_decode(&decode_ctx);
+cleanup_rx:
+    teardown_usrp(&rx_ctx);
+cleanup_curl:
+    curl_global_cleanup();
 
-    return EXIT_SUCCESS;
+    return exit_status;
 }

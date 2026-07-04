@@ -26,23 +26,24 @@ static size_t suppress_output_callback(char *ptr, size_t size, size_t nmemb, voi
 
 // Dynamically creates the Authorization header using the OS environment variable.
 // Returns a heap-allocated string that the caller must free.
-static char* create_auth_header_from_env(size_t *header_len) {
+static char* create_auth_header_from_env(size_t *out_header_len) {
     // Fetch the token from the OS environment block
     char *raw_token = getenv("INFLUX_TOKEN");
-    size_t raw_token_len = strlen(raw_token);
     if (!raw_token) {
         fprintf(stderr, "FATAL: INFLUX_TOKEN environment variable is not set.\n");
         return NULL;
     }
+    size_t raw_token_len = strlen(raw_token);
 
     // Allocate memory for the formatted header string
     const char *prefix = "Authorization: Token ";
-    *header_len = strlen(prefix) + raw_token_len + 1;
+    *out_header_len = strlen(prefix) + raw_token_len + 1;
     
+    // TODO: clear auth header as well somehow?
     // Assemble the auth header
-    char *auth_header = malloc(*header_len);
+    char *auth_header = malloc(*out_header_len);
     if (auth_header)
-        snprintf(auth_header, *header_len, "%s%s", prefix, raw_token);
+        snprintf(auth_header, *out_header_len, "%s%s", prefix, raw_token);
 
     // Remove token trace from memory
     explicit_bzero(raw_token, raw_token_len);
@@ -164,6 +165,7 @@ void run_export_loop(radar_state_ctx_t *ctx, volatile sig_atomic_t *keep_running
 
     size_t header_len = 0;
     char *auth_header = create_auth_header_from_env(&header_len);
+    if (!auth_header) return;
 
     // Initialize the network handle once, before the main loop
     CURL *curl = curl_easy_init();

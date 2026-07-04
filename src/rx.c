@@ -21,13 +21,14 @@
     }
 
 int init_usrp(rx_ctx_t *ctx) {
+    if (!ctx) return EXIT_FAILURE;
+    ctx->verbose = false;
 
     // Define configuration values
     double freq          = 1090e6;
     double rate          = 2e6;
     double gain          = 70;
     size_t channel       = 0;
-    bool verbose         = false;
     int return_code      = EXIT_SUCCESS;
     char error_string[512];
 
@@ -49,7 +50,7 @@ int init_usrp(rx_ctx_t *ctx) {
 
     // Create USRP
     fprintf(stderr, "Creating USRP...");
-    uhd_usrp_make(&(ctx->usrp), "");
+    EXECUTE_OR_GOTO(return_error, uhd_usrp_make(&(ctx->usrp), ""))
 
     // Create RX streamer and metadata
     EXECUTE_OR_GOTO(free_usrp, uhd_rx_streamer_make(&(ctx->rx_streamer)))
@@ -82,21 +83,25 @@ int init_usrp(rx_ctx_t *ctx) {
     fprintf(stderr, "Buffer size in samples: %zu\n", ctx->samps_per_buff);
 
     ctx->trash_buffer = malloc(ctx->samps_per_buff * 2 * sizeof(int16_t));
-    return 0;
+    if (ctx->trash_buffer)
+        return 0;
+    else
+        return_code = EXIT_FAILURE;
     
 free_rx_metadata:
-    if (verbose) fprintf(stderr, "Cleaning up RX metadata.\n");
+    if (ctx->verbose) fprintf(stderr, "Cleaning up RX metadata.\n");
     uhd_rx_metadata_free(&(ctx->md));
 free_rx_streamer:
-    if (verbose) fprintf(stderr, "Cleaning up RX streamer.\n");
+    if (ctx->verbose) fprintf(stderr, "Cleaning up RX streamer.\n");
     uhd_rx_streamer_free(&(ctx->rx_streamer));
 free_usrp:
-    if (verbose) fprintf(stderr, "Cleaning up USRP.\n");
+    if (ctx->verbose) fprintf(stderr, "Cleaning up USRP.\n");
     if (return_code != EXIT_SUCCESS && ctx->usrp != NULL) {
         uhd_usrp_last_error(ctx->usrp, error_string, 512);
         fprintf(stderr, "USRP reported the following error: %s\n", error_string);
     }
     uhd_usrp_free(&(ctx->usrp));
+return_error:
 
     fprintf(stderr, (return_code ? "Failure\n" : "Success\n"));
     return return_code;
@@ -124,6 +129,8 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
     fprintf(stderr, "Issuing stream command.\n");
     if (uhd_rx_streamer_issue_stream_cmd(ctx->rx_streamer, &stream_cmd) != 0) {
         fprintf(stderr, "Failed to issue stream command.\n");
+        *keep_running = 0;
+        ring_buffer_abort(rb);
         return;
     }
     
@@ -139,10 +146,9 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
             target_buff = ctx->trash_buffer;
             dropping_packet = true;
             fprintf(stderr, "WARN: Ring buffer overrun! Dropping packet.\n");
-        } else {
-            // Buffer is good! Route the incoming radio waves to shared memory
+        // Buffer is good! Route the incoming radio waves to shared memory
+        } else
             target_buff = block->data;
-        }
 
         // Set up the pointer array for UHD
         void *buffs_ptr[1] = { target_buff };
@@ -150,23 +156,29 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
         
         // Receive directly into the shared memory
         if (uhd_rx_streamer_recv(ctx->rx_streamer, buffs_ptr, ctx->samps_per_buff, &(ctx->md), 3.0, false, &num_rx_samps) != 0) {
-            fprintf(stderr, "Streamer receive failed.\n");
+            fprintf(stderr, "FATAL: Streamer receive API failed.\n");
+            *keep_running = 0;
+            ring_buffer_abort(rb);
             break;
         }
         
-        // Commit the written samples for the consumer to read
-        // Only commit the data if we didn't throw it in the trash
-        if (!dropping_packet) {
-            ring_buffer_commit_write(rb, num_rx_samps);
-        }
-
-        // Error handling
+        // Evaluate hardware status for any error
         uhd_rx_metadata_error_code_t error_code;
         uhd_rx_metadata_error_code(ctx->md, &error_code);
-        if (error_code != UHD_RX_METADATA_ERROR_CODE_NONE) {
-            fprintf(stderr, "Error code 0x%x returned during streaming. Aborting.\n", error_code);
+        if (error_code == UHD_RX_METADATA_ERROR_CODE_TIMEOUT) {
+            fprintf(stderr, "FATAL: RX Stream timeout. Hardware disconnected?\n");
+            *keep_running = 0;
+            ring_buffer_abort(rb);
             break;
-        }
+        // Treat other codes (like OUT_OF_SEQUENCE drops) as warnings, let the loop recover
+        } else if (error_code != UHD_RX_METADATA_ERROR_CODE_NONE)
+            fprintf(stderr, "WARNING: UHD stream reported error code 0x%x. Recovering...\n", error_code);
+        
+        // Commit the written samples for the consumer to read
+        // Only commit the data if we didn't throw it in the trash
+        // and if there is data available
+        if (!dropping_packet && 0 < num_rx_samps)
+            ring_buffer_commit_write(rb, num_rx_samps);
     }
 }
 
@@ -174,7 +186,7 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
 // Thread Spawning Infrastructure
 // ============================================================================
 
-// An ugly payload struct, because pthread_create only accepts void* args
+// An ugly payload struct, because pthread_create only accepts void* args.
 typedef struct {
     rx_ctx_t *ctx;
     ring_buffer_t *rb;
@@ -190,19 +202,23 @@ static void *rx_thread_func(void *arg) {
     return NULL;
 }
 
-pthread_t spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
+int spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running, pthread_t *out_thread) {
+    if (!ctx || !rb || !out_thread) return EXIT_FAILURE;
+    
     // malloc is needed for the payload to survive the stack cleanup
     rx_thread_args_t *args = malloc(sizeof(rx_thread_args_t));
+    if (!args) {
+        fprintf(stderr, "Failed to allocate memory for rx thread args.\n");
+        return EXIT_FAILURE;
+    }
     args->ctx = ctx;
     args->rb = rb;
     args->keep_running = keep_running;
 
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, rx_thread_func, args) != 0) {
+    if (pthread_create(out_thread, NULL, rx_thread_func, args) != 0) {
         fprintf(stderr, "Failed to spawn rx thread.\n");
         free(args);
-        // Return a null-equivalent thread ID on failure
-        return 0;
+        return EXIT_FAILURE;
     }
-    return thread;
+    return EXIT_SUCCESS;
 }

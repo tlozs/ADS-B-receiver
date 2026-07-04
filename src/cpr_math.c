@@ -1,5 +1,6 @@
 #include "cpr_math.h"
 #include <math.h>
+#include <stddef.h>
 
 // source: https://shemesh.larc.nasa.gov/fm/papers/VSTTE2017-draft.pdf
 
@@ -29,6 +30,8 @@ static inline int cpr_mod(int x, int y) {
 }
 
 bool decode_global_cpr(int32_t cpr_even_lat, int32_t cpr_even_lon, int32_t cpr_odd_lat, int32_t cpr_odd_lon, bool last_cpr_is_even, double *lat_result, double *lon_result) {
+    if (!lat_result || !lon_result) return false;
+    
     double N = 131072.0;
 
     double dlat_even = 6.0;

@@ -13,25 +13,35 @@ static void convert_sc16_to_u8(const int16_t *restrict src, uint8_t *restrict de
     }
 }
 
-void init_decode(decode_ctx_t *ctx, size_t samps_per_buff) {
-    ctx->samps_per_buff = samps_per_buff;
+int init_decode(decode_ctx_t *ctx, size_t samps_per_buff) {
+    if (!ctx || samps_per_buff <= 0) return EXIT_FAILURE;
 
-    ctx->buff_downsampled = malloc(ctx->samps_per_buff * 2 * sizeof(uint8_t));
-    ctx->mag = calloc((ctx->samps_per_buff + OVERLAP_SAMPLES), sizeof(uint16_t));
-
+    ctx->buff_downsampled = malloc(samps_per_buff * 2 * sizeof(uint8_t));
+    ctx->mag = calloc((samps_per_buff + OVERLAP_SAMPLES), sizeof(uint16_t));
     ctx->mode_s = malloc(sizeof(mode_s_t));
+
+    // Check all allocations
+    if (!ctx->buff_downsampled || !ctx->mag || !ctx->mode_s) {
+        free(ctx->buff_downsampled);
+        free(ctx->mag);
+        free(ctx->mode_s);
+        return EXIT_FAILURE;
+    }
+
     mode_s_init(ctx->mode_s);
     ctx->mode_s->check_crc  = 1;
     ctx->mode_s->fix_errors = 1;
     ctx->mode_s->aggressive = 0;
+
+    return EXIT_SUCCESS;
 }
 
 void teardown_decode(decode_ctx_t *ctx) {
     if (!ctx) return;
 
-    if (ctx->buff_downsampled) free(ctx->buff_downsampled);
-    if (ctx->mag) free(ctx->mag);
-    if (ctx->mode_s) free(ctx->mode_s);
+    free(ctx->buff_downsampled);
+    free(ctx->mag);
+    free(ctx->mode_s);
 }
 
 // Determines if the message is transmitted from an aircraft that is certainly in the air.
@@ -199,25 +209,25 @@ static void do_decode(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_
         // Check for the abort signal to exit the loop so the thread can terminate gracefully
         if (!block) break;
 
-        // Extract the data safely
-        int16_t *buff = block->data;
+        // Extract the actual sample count, this is important, not the samps per buffer
+        size_t actual_samps = block->actual_sample_count;
 
         // Downsample sc16 values to u8 expected by the complex->mag conversion
-        convert_sc16_to_u8(buff, ctx->buff_downsampled, ctx->samps_per_buff * 2);
+        convert_sc16_to_u8(block->data, ctx->buff_downsampled, actual_samps * 2);
         
         // Commit the read to free up buffer space asap
         ring_buffer_commit_read(rb);
 
         // Perform the complex->mag conversion
-        mode_s_compute_magnitude_vector(ctx->buff_downsampled, ctx->mag + OVERLAP_SAMPLES, ctx->samps_per_buff * 2);
+        mode_s_compute_magnitude_vector(ctx->buff_downsampled, ctx->mag + OVERLAP_SAMPLES, actual_samps * 2);
 
         // Look for an ADS-B message
-        mode_s_detect(ctx->mode_s, ctx->mag, ctx->samps_per_buff + OVERLAP_SAMPLES, on_message);
+        mode_s_detect(ctx->mode_s, ctx->mag, actual_samps + OVERLAP_SAMPLES, on_message);
 
         // Move the overlap tail to the front for the next cycle
         // memmove instead of memcpy is used just in case samps_per_buff 
         // is strangely smaller than 240 and the memory regions overlap
-        memmove(ctx->mag, ctx->mag + ctx->samps_per_buff, OVERLAP_SAMPLES * sizeof(uint16_t));
+        memmove(ctx->mag, ctx->mag + actual_samps, OVERLAP_SAMPLES * sizeof(uint16_t));
     }
 }
 
@@ -225,7 +235,7 @@ static void do_decode(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_
 // Thread Spawning Infrastructure
 // ============================================================================
 
-// An ugly payload struct, because pthread_create only accepts void* args
+// An ugly payload struct, because pthread_create only accepts void* args.
 typedef struct {
     decode_ctx_t *ctx;
     ring_buffer_t *rb;
@@ -241,19 +251,23 @@ static void *decode_thread_func(void *arg) {
     return NULL;
 }
 
-pthread_t spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
+int spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running, pthread_t *out_thread) {
+    if (!ctx || !rb || !out_thread) return EXIT_FAILURE;
+    
     // malloc is needed for the payload to survive the stack cleanup
     decode_thread_args_t *args = malloc(sizeof(decode_thread_args_t));
+    if (!args) {
+        fprintf(stderr, "Failed to allocate memory for decode thread args.\n");
+        return EXIT_FAILURE;
+    }
     args->ctx = ctx;
     args->rb = rb;
     args->keep_running = keep_running;
 
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, decode_thread_func, args) != 0) {
+    if (pthread_create(out_thread, NULL, decode_thread_func, args) != 0) {
         fprintf(stderr, "Failed to spawn decode thread.\n");
         free(args);
-        // Return a null-equivalent thread ID on failure
-        return 0;
+        return EXIT_FAILURE;
     }
-    return thread;
+    return EXIT_SUCCESS;
 }

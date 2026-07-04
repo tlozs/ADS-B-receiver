@@ -14,7 +14,14 @@ static void convert_sc16_to_u8(const int16_t *restrict src, uint8_t *restrict de
 }
 
 int init_decode(decode_ctx_t *ctx, size_t samps_per_buff) {
-    if (!ctx || samps_per_buff <= 0) return EXIT_FAILURE;
+    if (!ctx) {
+        fprintf(stderr, "ERROR: Cannot initialize the decode context without a valid destination pointer.\n");
+        return EXIT_FAILURE;
+    }
+    if (samps_per_buff == 0) {
+        fprintf(stderr, "ERROR: Cannot initialize the decode context with a zero-sized sample buffer.\n");
+        return EXIT_FAILURE;
+    }
 
     ctx->buff_downsampled = malloc(samps_per_buff * 2 * sizeof(uint8_t));
     ctx->mag = calloc((samps_per_buff + OVERLAP_SAMPLES), sizeof(uint16_t));
@@ -22,6 +29,7 @@ int init_decode(decode_ctx_t *ctx, size_t samps_per_buff) {
 
     // Check all allocations
     if (!ctx->buff_downsampled || !ctx->mag || !ctx->mode_s) {
+        fprintf(stderr, "ERROR: Failed to allocate one or more decode buffers.\n");
         free(ctx->buff_downsampled);
         free(ctx->mag);
         free(ctx->mode_s);
@@ -160,7 +168,7 @@ static void on_message(mode_s_t *mode_s, struct mode_s_msg *mm) {
         break;
     // All-call reply
     case 11:
-        // The get_or_create_aircraft() call already upadted the timestamp, 
+        // The get_or_create_aircraft() call already updated the timestamp,
         // there is nothing else to do.
         break;
     // ADS-B and non-transponder ADS-B
@@ -212,7 +220,7 @@ static void do_decode(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_
         // Extract the actual sample count, this is important, not the samps per buffer
         size_t actual_samps = block->actual_sample_count;
 
-        // Downsample sc16 values to u8 expected by the complex->mag conversion
+        // Downsample sc16 values to the unsigned-byte format expected by the magnitude conversion
         convert_sc16_to_u8(block->data, ctx->buff_downsampled, actual_samps * 2);
         
         // Commit the read to free up buffer space asap
@@ -225,8 +233,8 @@ static void do_decode(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_
         mode_s_detect(ctx->mode_s, ctx->mag, actual_samps + OVERLAP_SAMPLES, on_message);
 
         // Move the overlap tail to the front for the next cycle
-        // memmove instead of memcpy is used just in case samps_per_buff 
-        // is strangely smaller than 240 and the memory regions overlap
+        // memmove is used instead of memcpy because the overlap buffer and the
+        // destination region intentionally refer to the same storage window
         memmove(ctx->mag, ctx->mag + actual_samps, OVERLAP_SAMPLES * sizeof(uint16_t));
     }
 }
@@ -246,13 +254,21 @@ typedef struct {
 // It is explicitly marked 'static' so it is locked to this file.
 static void *decode_thread_func(void *arg) {
     decode_thread_args_t *args = (decode_thread_args_t*)arg;
+    if (!args || !args->ctx || !args->rb || !args->keep_running) {
+        fprintf(stderr, "ERROR: Decode thread started without valid thread arguments.\n");
+        free(args);
+        return NULL;
+    }
     do_decode(args->ctx, args->rb, args->keep_running);
     free(args);
     return NULL;
 }
 
 int spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running, pthread_t *out_thread) {
-    if (!ctx || !rb || !out_thread) return EXIT_FAILURE;
+    if (!ctx || !rb || !keep_running || !out_thread) {
+        fprintf(stderr, "ERROR: Cannot spawn the decode thread without valid context, ring buffer, shutdown flag, and output handle.\n");
+        return EXIT_FAILURE;
+    }
     
     // malloc is needed for the payload to survive the stack cleanup
     decode_thread_args_t *args = malloc(sizeof(decode_thread_args_t));
@@ -264,8 +280,9 @@ int spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomi
     args->rb = rb;
     args->keep_running = keep_running;
 
-    if (pthread_create(out_thread, NULL, decode_thread_func, args) != 0) {
-        fprintf(stderr, "Failed to spawn decode thread.\n");
+    int create_rc = pthread_create(out_thread, NULL, decode_thread_func, args);
+    if (create_rc != 0) {
+        fprintf(stderr, "ERROR: Failed to spawn decode thread: %s\n", strerror(create_rc));
         free(args);
         return EXIT_FAILURE;
     }

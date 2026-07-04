@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <signal.h>
 
-// Context neccesairy for decoding data from the ring buffer.
+// Context necessary for decoding data from the ring buffer.
 typedef struct {
     mode_s_t *mode_s;
     uint8_t *buff_downsampled;

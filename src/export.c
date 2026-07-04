@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <signal.h>
 #include <time.h>
 #include <curl/curl.h>
@@ -24,11 +25,27 @@ static size_t suppress_output_callback(char *ptr, size_t size, size_t nmemb, voi
     return size * nmemb;
 }
 
+// Securely zeros memory, defeating compiler Dead Store Elimination (DSE).
+// Completely portable across all C standards.
+static void secure_memzero(void *ptr, size_t len) {
+    if (!ptr || len == 0) return;
+
+    // The volatile qualifier stops the optimizer from analyzing the call.
+    void *(*volatile volatile_memset)(void *, int, size_t) = memset;
+    volatile_memset(ptr, 0, len);
+}
+
 // Dynamically creates the Authorization header using the OS environment variable.
 // Returns a heap-allocated string that the caller must free.
 static char* create_auth_header_from_env(size_t *out_header_len) {
-    // Fetch the token from the OS environment block
-    char *raw_token = getenv("INFLUX_TOKEN");
+    if (!out_header_len) {
+        fprintf(stderr, "ERROR: internal header-length output pointer is null.\n");
+        return NULL;
+    }
+
+    // Fetch the token from the OS environment block.
+    // getenv() returns process-owned storage, so we only read from it.
+    const char *raw_token = getenv("INFLUX_TOKEN");
     if (!raw_token) {
         fprintf(stderr, "FATAL: INFLUX_TOKEN environment variable is not set.\n");
         return NULL;
@@ -39,21 +56,25 @@ static char* create_auth_header_from_env(size_t *out_header_len) {
     const char *prefix = "Authorization: Token ";
     *out_header_len = strlen(prefix) + raw_token_len + 1;
     
-    // TODO: clear auth header as well somehow?
-    // Assemble the auth header
+    // Assemble the auth header.
     char *auth_header = malloc(*out_header_len);
-    if (auth_header)
-        snprintf(auth_header, *out_header_len, "%s%s", prefix, raw_token);
+    if (!auth_header) {
+        fprintf(stderr, "FATAL: Failed to allocate memory for the InfluxDB authorization header.\n");
+        return NULL;
+    }
 
-    // Remove token trace from memory
-    explicit_bzero(raw_token, raw_token_len);
+    snprintf(auth_header, *out_header_len, "%s%s", prefix, raw_token);
     return auth_header;
 }
 
 // Constructs a payload string in Line Protocol format from the snapshot data
 // and sends it as a POST request to the URL defined by the curl network handle.
 static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t count) {
-    if (!curl || !snapshot || count == 0) return;
+    if (!curl || !snapshot) {
+        fprintf(stderr, "ERROR: Cannot export to InfluxDB without a valid curl handle and snapshot buffer.\n");
+        return;
+    }
+    if (count == 0) return;
 
     // We allow a generous 512 character limit to a row of the Line Protocol
     size_t max_payload_size = count * 512 * sizeof(char);
@@ -157,46 +178,62 @@ static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t cou
     free(payload);
 }
 
-void run_export_loop(radar_state_ctx_t *ctx, volatile sig_atomic_t *keep_running) {
-    if (!ctx) {
-        fprintf(stderr, "Radar context does not exist, unable to run the export loop!\n");
-        return;
+int run_export_loop(radar_state_ctx_t *ctx, volatile sig_atomic_t *keep_running) {
+    if (!ctx || !keep_running) {
+        fprintf(stderr, "ERROR: export loop cannot start without a valid radar context and shutdown flag.\n");
+        return EXIT_FAILURE;
     }
+    int exit_status = EXIT_SUCCESS;
 
     size_t header_len = 0;
     char *auth_header = create_auth_header_from_env(&header_len);
-    if (!auth_header) return;
+    if (!auth_header) return EXIT_FAILURE;
 
     // Initialize the network handle once, before the main loop
     CURL *curl = curl_easy_init();
     struct curl_slist *headers = NULL;
-    if (curl) {
-        headers = curl_slist_append(headers, auth_header);
-        // Remove token trace from memory
-        explicit_bzero(auth_header, header_len);
+    if (!curl) {
+        fprintf(stderr, "FATAL: Failed to set up the InfluxDB network handle.\n");
+        secure_memzero(auth_header, header_len);
         free(auth_header);
-        curl_easy_setopt(curl, CURLOPT_URL, INFLUX_URL);
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, suppress_output_callback);
-        // Give the network a maximum of 800 milliseconds to complete the POST
-        // This guarantees the export loop run never exceeds 1 second
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 800L);
+        return EXIT_FAILURE;
     }
-    else {
-        fprintf(stderr, "Failed to set up network handle.\n");
-        return;
+
+    headers = curl_slist_append(headers, auth_header);
+    secure_memzero(auth_header, header_len);
+    free(auth_header);
+    if (!headers) {
+        fprintf(stderr, "FATAL: Failed to allocate curl header list.\n");
+        curl_easy_cleanup(curl);
+        return EXIT_FAILURE;
+    }
+
+    if (curl_easy_setopt(curl, CURLOPT_URL, INFLUX_URL) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, suppress_output_callback) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 800L) != CURLE_OK) {
+        
+        fprintf(stderr, "FATAL: Failed to configure the InfluxDB HTTP client.\n");
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        return EXIT_FAILURE;
     }
 
     // Allocate a local buffer to hold the 1Hz snapshot
     aircraft_snapshot_t snapshot_buffer[MAX_AIRCRAFT];
 
-    // We make sure the export runs every second
-    // So we establish the baseline time right before entering the loop
+    // Run the export once per second.
+    // Establish the baseline time immediately before entering the loop.
     struct timespec next_wakeup;
-    clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
+    if (clock_gettime(CLOCK_MONOTONIC, &next_wakeup) != 0) {
+        fprintf(stderr, "FATAL: Failed to read the monotonic clock for export scheduling: %s\n", strerror(errno));
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        return EXIT_FAILURE;
+    }
 
     while (*keep_running) {
-        // We need to make the next export exactly 1 second later
+        // Schedule the next export exactly one second later.
         next_wakeup.tv_sec += 1;
 
         size_t active_count = create_snapshot(ctx, snapshot_buffer);
@@ -205,22 +242,35 @@ void run_export_loop(radar_state_ctx_t *ctx, volatile sig_atomic_t *keep_running
 
         // Check if we ran over time before sleeping
         struct timespec current_time;
-        clock_gettime(CLOCK_MONOTONIC, &current_time);
+        if (clock_gettime(CLOCK_MONOTONIC, &current_time) != 0) {
+            fprintf(stderr, "ERROR: Failed to read the monotonic clock during export scheduling: %s\n", strerror(errno));
+            exit_status = EXIT_FAILURE;
+            break;
+        }
         
         if (current_time.tv_sec > next_wakeup.tv_sec || 
            (current_time.tv_sec == next_wakeup.tv_sec && current_time.tv_nsec > next_wakeup.tv_nsec)) {
             // We missed our target completely! 
             fprintf(stderr, "WARNING: Export loop overran 1-second boundary. Resetting timer.\n");
             
-            // Re-establish the baseline so we don't rapid-fire to catch up
-            clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
+            // Re-establish the baseline so the loop does not try to catch up in a burst.
+            if (clock_gettime(CLOCK_MONOTONIC, &next_wakeup) != 0) {
+                fprintf(stderr, "ERROR: Failed to reset the export timer after an overrun: %s\n", strerror(errno));
+                exit_status = EXIT_FAILURE;
+                break;
+            }
             // Skip the sleep this time and immediately start the next snapshot
             continue;
         }
 
-        // Sleep until the absolute target time
-        // The OS automatically subtracts the time taken by the work
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
+        // Sleep until the absolute target time.
+        // The OS automatically accounts for the time spent doing the work.
+        int sleep_rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
+        if (sleep_rc != 0 && sleep_rc != EINTR) {
+            fprintf(stderr, "ERROR: Export loop sleep failed: %s\n", strerror(sleep_rc));
+            exit_status = EXIT_FAILURE;
+            break;
+        }
     }
 
     // Clean up network handle when shutting down
@@ -228,4 +278,6 @@ void run_export_loop(radar_state_ctx_t *ctx, volatile sig_atomic_t *keep_running
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
     }
+
+    return exit_status;
 }

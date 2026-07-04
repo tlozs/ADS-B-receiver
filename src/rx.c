@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #define EXECUTE_OR_GOTO(label, ...) \
@@ -21,7 +22,10 @@
     }
 
 int init_usrp(rx_ctx_t *ctx) {
-    if (!ctx) return EXIT_FAILURE;
+    if (!ctx) {
+        fprintf(stderr, "ERROR: Cannot initialize the SDR context without a valid destination pointer.\n");
+        return EXIT_FAILURE;
+    }
     ctx->verbose = false;
 
     // Define configuration values
@@ -32,7 +36,7 @@ int init_usrp(rx_ctx_t *ctx) {
     int return_code      = EXIT_SUCCESS;
     char error_string[512];
 
-    // Create other necessary structs
+    // Create the UHD configuration structures needed by the receiver.
     uhd_tune_request_t tune_request = {
         .target_freq     = freq,
         .rf_freq_policy  = UHD_TUNE_REQUEST_POLICY_AUTO,
@@ -49,7 +53,7 @@ int init_usrp(rx_ctx_t *ctx) {
     };
 
     // Create USRP
-    fprintf(stderr, "Creating USRP...");
+    fprintf(stderr, "Creating USRP...\n");
     EXECUTE_OR_GOTO(return_error, uhd_usrp_make(&(ctx->usrp), ""))
 
     // Create RX streamer and metadata
@@ -85,8 +89,10 @@ int init_usrp(rx_ctx_t *ctx) {
     ctx->trash_buffer = malloc(ctx->samps_per_buff * 2 * sizeof(int16_t));
     if (ctx->trash_buffer)
         return 0;
-    else
+    else {
+        fprintf(stderr, "ERROR: Failed to allocate the SDR trash buffer.\n");
         return_code = EXIT_FAILURE;
+    }
     
 free_rx_metadata:
     if (ctx->verbose) fprintf(stderr, "Cleaning up RX metadata.\n");
@@ -118,9 +124,14 @@ void teardown_usrp(rx_ctx_t *ctx) {
     if (ctx->usrp) uhd_usrp_free(&(ctx->usrp));
 }
 
-// Issues a stream command to the SDR and starts to receive data into the ring buffer
-// until keep_running remains true.
+// Issues a stream command to the SDR and receives data into the ring buffer
+// until shutdown is requested.
 static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
+    if (!ctx || !rb || !keep_running) {
+        fprintf(stderr, "ERROR: RX stream loop started without valid context, buffer, or shutdown flag.\n");
+        return;
+    }
+
     uhd_stream_cmd_t stream_cmd = {
         .stream_mode = UHD_STREAM_MODE_START_CONTINUOUS,
         .stream_now  = true
@@ -142,10 +153,10 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
         
         // Route the data depending on buffer state
         if (!block) {
-            // Buffer is full! Route the incoming radio waves to the trash
+            // Buffer is full. Route the incoming IQ samples to the fallback buffer.
             target_buff = ctx->trash_buffer;
             dropping_packet = true;
-            fprintf(stderr, "WARN: Ring buffer overrun! Dropping packet.\n");
+            fprintf(stderr, "WARNING: Ring buffer overrun; dropping packet.\n");
         // Buffer is good! Route the incoming radio waves to shared memory
         } else
             target_buff = block->data;
@@ -197,13 +208,21 @@ typedef struct {
 // It is explicitly marked 'static' so it is locked to this file.
 static void *rx_thread_func(void *arg) {
     rx_thread_args_t *args = (rx_thread_args_t*)arg;
+    if (!args || !args->ctx || !args->rb || !args->keep_running) {
+        fprintf(stderr, "ERROR: RX thread started without valid thread arguments.\n");
+        free(args);
+        return NULL;
+    }
     do_rx_stream(args->ctx, args->rb, args->keep_running);
     free(args);
     return NULL;
 }
 
 int spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running, pthread_t *out_thread) {
-    if (!ctx || !rb || !out_thread) return EXIT_FAILURE;
+    if (!ctx || !rb || !keep_running || !out_thread) {
+        fprintf(stderr, "ERROR: Cannot spawn the RX thread without valid context, ring buffer, shutdown flag, and output handle.\n");
+        return EXIT_FAILURE;
+    }
     
     // malloc is needed for the payload to survive the stack cleanup
     rx_thread_args_t *args = malloc(sizeof(rx_thread_args_t));
@@ -215,8 +234,9 @@ int spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *kee
     args->rb = rb;
     args->keep_running = keep_running;
 
-    if (pthread_create(out_thread, NULL, rx_thread_func, args) != 0) {
-        fprintf(stderr, "Failed to spawn rx thread.\n");
+    int create_rc = pthread_create(out_thread, NULL, rx_thread_func, args);
+    if (create_rc != 0) {
+        fprintf(stderr, "ERROR: Failed to spawn RX thread: %s\n", strerror(create_rc));
         free(args);
         return EXIT_FAILURE;
     }

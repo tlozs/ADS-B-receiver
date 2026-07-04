@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <signal.h>
 
-// Context neccesairy for recieving stream data through the SDR
+// Context necessary for receiving stream data through the SDR.
 typedef struct {
     uhd_usrp_handle usrp;
     uhd_rx_streamer_handle rx_streamer;

@@ -72,7 +72,7 @@ typedef struct {
 } aircraft_snapshot_t;
 
 // Context necessary for managing the RAM repository. 
-// An aircraft inside with ICAO = 0 means empty slot.
+// An aircraft entry with ICAO = 0 means an empty slot.
 typedef struct {
     aircraft_t repo[MAX_AIRCRAFT];
     pthread_mutex_t mutex;
@@ -89,7 +89,7 @@ void teardown_radar_state(radar_state_ctx_t *ctx);
 
 // Returns a pointer to the aircraft data inside the RAM repository.
 // If no aircraft is found, then a blank item is returned with specific initial values.
-// A NULL pointer is returned if an error occured or there is no space left in the repository for a new aircraft.
+// A NULL pointer is returned if an error occurred or there is no space left in the repository for a new aircraft.
 aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao);
 
 // Returns a pointer to the aircraft data inside the RAM repository.

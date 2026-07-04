@@ -1,19 +1,31 @@
 #include "ring_buffer.h"
+#include <stdio.h>
+#include <string.h>
 
 ring_buffer_t *ring_buffer_create(size_t samps_per_block) {    
-    if (samps_per_block <= 0) return NULL;
+    if (samps_per_block == 0) {
+        fprintf(stderr, "ERROR: Cannot create a ring buffer with a zero-sized block.\n");
+        return NULL;
+    }
     ring_buffer_t *rb = calloc(1, sizeof(ring_buffer_t));
-    if (!rb) return NULL;
+    if (!rb) {
+        fprintf(stderr, "ERROR: Failed to allocate the ring buffer control structure.\n");
+        return NULL;
+    }
 
     rb->samps_per_block = samps_per_block;
     rb->is_shutting_down = false;
     
     // The NULL argument means "use default thread attributes"
-    if (pthread_mutex_init(&(rb->mutex), NULL) != 0) {
+    int mutex_rc = pthread_mutex_init(&(rb->mutex), NULL);
+    if (mutex_rc != 0) {
+        fprintf(stderr, "ERROR: Failed to initialize the ring buffer mutex: %s\n", strerror(mutex_rc));
         free(rb);
         return NULL;
     }
-    if (pthread_cond_init(&(rb->cond_ready), NULL) != 0) {
+    int cond_rc = pthread_cond_init(&(rb->cond_ready), NULL);
+    if (cond_rc != 0) {
+        fprintf(stderr, "ERROR: Failed to initialize the ring buffer condition variable: %s\n", strerror(cond_rc));
         pthread_mutex_destroy(&(rb->mutex));
         free(rb);
         return NULL;
@@ -23,6 +35,7 @@ ring_buffer_t *ring_buffer_create(size_t samps_per_block) {
         // Multiply by 2 because complex IQ data has two 16-bit values per sample
         rb->ring[i].data = malloc(samps_per_block * 2 * sizeof(int16_t));
         if (!rb->ring[i].data) {
+            fprintf(stderr, "ERROR: Failed to allocate a ring buffer data block.\n");
             // free previously allocated memory
             for (int j = 0; j < i; j++)
                 free(rb->ring[j].data);
@@ -52,6 +65,11 @@ void ring_buffer_destroy(ring_buffer_t *rb) {
 }
 
 iq_samps_block_t *ring_buffer_acquire_write(ring_buffer_t *rb) {
+    if (!rb) {
+        fprintf(stderr, "ERROR: Cannot acquire a write block from a null ring buffer.\n");
+        return NULL;
+    }
+
     pthread_mutex_lock(&(rb->mutex));
     
     // Check if the current block is still being read by the consumer
@@ -69,6 +87,11 @@ iq_samps_block_t *ring_buffer_acquire_write(ring_buffer_t *rb) {
 }
 
 void ring_buffer_commit_write(ring_buffer_t *rb, size_t actual_samples) {
+    if (!rb) {
+        fprintf(stderr, "ERROR: Cannot commit a write to a null ring buffer.\n");
+        return;
+    }
+
     pthread_mutex_lock(&(rb->mutex));
     
     // Update the metadata, advance the index and wrap around
@@ -82,7 +105,10 @@ void ring_buffer_commit_write(ring_buffer_t *rb, size_t actual_samples) {
 }
 
 iq_samps_block_t *ring_buffer_acquire_read(ring_buffer_t *rb) {
-    if (!rb) return NULL;
+    if (!rb) {
+        fprintf(stderr, "ERROR: Cannot acquire a read block from a null ring buffer.\n");
+        return NULL;
+    }
     pthread_mutex_lock(&(rb->mutex));
     
     // Go to sleep if the block is not ready yet and no shutdown signal is received

@@ -13,7 +13,7 @@ void precalculate_nl_table() {
         nl_table[i] = 180.0 / M_PI * acos(sin(M_PI/60.0)/sin(M_PI/(double)i));
 }
 
-// Queries the lookup table to determine the number of longitude zones at a given latitude.
+// Looks up the number of longitude zones at a given latitude.
 static int get_nl(double lat) {
     double lat_abs = fabs(lat);
     for (size_t i = 2; i < 60; i++)
@@ -22,8 +22,7 @@ static int get_nl(double lat) {
     return 59;
 }
 
-// The most efficient mathematical modulo for CPR decoding.
-// Ensures that for example -5 mod 60 results in 55 instead of -5, avoiding negative results.
+// Modulo helper for CPR decoding that always returns a non-negative result.
 static inline int cpr_mod(int x, int y) {
     int r = x % y;
     return r < 0 ? r + y : r;
@@ -45,8 +44,7 @@ bool decode_global_cpr(int32_t cpr_even_lat, int32_t cpr_even_lon, int32_t cpr_o
     double rlat_even = dlat_even * (cpr_mod(j, 60) + c_lat_even);
     double rlat_odd = dlat_odd * (cpr_mod(j, 59) + c_lat_odd);
 
-    // If there is an nl mismatch between the two messages, 
-    // they are from different zones, decoding is not possible
+    // If the two messages fall into different latitude zones, decoding is not possible
     int32_t nl_even = get_nl(rlat_even);
     int32_t nl_odd = get_nl(rlat_odd);
     if (nl_even != nl_odd) return false;
@@ -61,7 +59,7 @@ bool decode_global_cpr(int32_t cpr_even_lat, int32_t cpr_even_lon, int32_t cpr_o
 
     int32_t m = (int32_t) floor((nl_even-1) * c_lon_even - nl_odd * c_lon_odd + 0.5);
 
-    // The more recent coordinate pair is "returned"
+    // Return the more recent coordinate pair
     if (last_cpr_is_even) {
         *lat_result = rlat_even;
         *lon_result = dlon_even * (cpr_mod(m, n_even) + c_lon_even);
@@ -71,11 +69,11 @@ bool decode_global_cpr(int32_t cpr_even_lat, int32_t cpr_even_lon, int32_t cpr_o
         *lon_result = dlon_odd * (cpr_mod(m, n_odd) + c_lon_odd);
     }
 
-    // Normalize latitude for the Southern Hemisphere
+    // Normalize latitude into the signed range
     if (*lat_result >= 270.0) 
         *lat_result -= 360.0;
     
-    // Normalize longitude for the Western Hemisphere
+    // Normalize longitude into the signed range
     if (*lon_result >= 180.0)
         *lon_result -= 360.0;
     

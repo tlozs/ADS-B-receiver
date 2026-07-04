@@ -1,6 +1,7 @@
 #include "radar_state.h"
 #include "cpr_math.h"
 #include <mode-s.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
@@ -22,10 +23,9 @@ static uint64_t get_system_tick_ms() {
         return (uint64_t)(ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
     }
 
-    // If the Linux kernel is so broken it forgets how to tell time, 
-    // log a massive error and return 0. The radar's time deltas will 
-    // be momentarily weird, but the process will not segfault or crash.
-    fprintf(stderr, "CRITICAL: Monotonic hardware clocks are completely unavailable!\n");
+    // If both clocks fail, log the concrete OS error and return 0.
+    // The time deltas will be momentarily incorrect, but the process stays alive.
+    fprintf(stderr, "CRITICAL: Monotonic hardware clocks are completely unavailable: %s\n", strerror(errno));
     return 0;
 }
 
@@ -80,13 +80,21 @@ static double fast_distance_meters(double lat1, double lon1, double lat2, double
 }
 
 int init_radar_state(radar_state_ctx_t *ctx) {
-    if (!ctx) return EXIT_FAILURE;
-    
-    if (pthread_mutex_init(&(ctx->mutex), NULL) != 0)
+    if (!ctx) {
+        fprintf(stderr, "ERROR: Cannot initialize the radar state without a valid destination pointer.\n");
         return EXIT_FAILURE;
+    }
+    
+    int mutex_rc = pthread_mutex_init(&(ctx->mutex), NULL);
+    if (mutex_rc != 0) {
+        fprintf(stderr, "ERROR: Failed to initialize the radar state mutex: %s\n", strerror(mutex_rc));
+        return EXIT_FAILURE;
+    }
 
     for (size_t i = 0; i < MAX_AIRCRAFT; i++) {
-        if (pthread_mutex_init(&(ctx->repo[i].mutex), NULL) != 0) {
+        int repo_mutex_rc = pthread_mutex_init(&(ctx->repo[i].mutex), NULL);
+        if (repo_mutex_rc != 0) {
+            fprintf(stderr, "ERROR: Failed to initialize aircraft slot mutex %zu: %s\n", i, strerror(repo_mutex_rc));
             // Roll back previously initialized mutexes
             for (size_t j = 0; j < i; j++)
                 pthread_mutex_destroy(&(ctx->repo[j].mutex));
@@ -108,7 +116,14 @@ void teardown_radar_state(radar_state_ctx_t *ctx) {
 }
 
 aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
-    if (!ctx || icao == 0) return NULL;
+    if (!ctx) {
+        fprintf(stderr, "ERROR: Cannot look up aircraft state without a valid radar context.\n");
+        return NULL;
+    }
+    if (icao == 0) {
+        fprintf(stderr, "ERROR: Cannot look up aircraft state for ICAO address 0.\n");
+        return NULL;
+    }
 
     aircraft_t *first_empty_slot = NULL;
     uint64_t now_ms = get_system_tick_ms();
@@ -166,7 +181,14 @@ aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
 }
 
 aircraft_t *get_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
-    if (!ctx || icao == 0) return NULL;
+    if (!ctx) {
+        fprintf(stderr, "ERROR: Cannot query aircraft state without a valid radar context.\n");
+        return NULL;
+    }
+    if (icao == 0) {
+        fprintf(stderr, "ERROR: Cannot query aircraft state for ICAO address 0.\n");
+        return NULL;
+    }
 
     uint64_t now_ms = get_system_tick_ms();
     
@@ -186,6 +208,11 @@ aircraft_t *get_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
 }
 
 size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
+    if (!ctx || !snapshot) {
+        fprintf(stderr, "ERROR: Cannot create an aircraft snapshot without valid input buffers.\n");
+        return 0;
+    }
+
     pthread_mutex_lock(&(ctx->mutex));
 
     aircraft_t *source = ctx->repo;
@@ -197,6 +224,18 @@ size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
             aircraft_t *ac = &source[i];
             
             pthread_mutex_lock(&(ac->mutex));
+
+            // If Ident/Emergency was active but just expired, 
+            // set dirty status, so wear-off can be recorded
+            if (ac->last_ident_ms != 0 && (STATUS_IDENT_PERSISTENCE < now_ms - ac->last_ident_ms)) {
+                ac->is_dirty = true;
+                // Reset to 0 so this only triggers exactly once
+                ac->last_ident_ms = 0;
+            }
+            if (ac->last_emergency_ms != 0 && (STATUS_ALERT_PERSISTENCE < now_ms - ac->last_emergency_ms)) {
+                ac->is_dirty = true;
+                ac->last_emergency_ms = 0; 
+            }
             
             // Only snapshot aircraft that have recent data
             // Also check for uninitialized data for every field
@@ -229,6 +268,8 @@ size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
     pthread_mutex_unlock(&(ctx->mutex));
     return active_count;
 }
+
+// TODO: update functions too silent on failure, gap or feature? they could return success instead
 
 void update_aircraft_landed(aircraft_t *ac, bool new_status) {
     if (!ac) return;

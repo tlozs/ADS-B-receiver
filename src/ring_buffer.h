@@ -21,7 +21,7 @@ typedef struct {
 // The ring buffer storing blocks of IQ data samples with additional metadata for management. Stores:
 // - The buffer of buffers, holding blocks of IQ data.
 // - The buffer size of each block.
-// - The mutex and condition variable neccesairy for producer-consumer multithreading.
+// - The mutex and condition variable necessary for producer-consumer multithreading.
 // - A shutdown flag to gracefully exit the thread.
 // - Keeps track of read and write indexes.
 typedef struct {

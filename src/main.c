@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <pthread.h>
 #include <curl/curl.h>
 
@@ -21,41 +22,51 @@ radar_state_ctx_t *g_radar_ctx = NULL;
 // Global shutdown signal flag
 volatile sig_atomic_t keep_running = 1;
 
-// Handler function to flip the shutdown signal flag on SIGINT.
-// Dummy needed to suppress the unused warning.
-void handle_sigint(int dummy) {
+// Signal handler that flips the shutdown flag.
+static void handle_sigint(int dummy) {
     (void)dummy; 
     keep_running = 0; 
 }
 
-void memory_clearup(decode_ctx_t *decode_ctx, rx_ctx_t *rx_ctx, ring_buffer_t *rb, radar_state_ctx_t *radar) {
-    teardown_decode(decode_ctx);
-    teardown_usrp(rx_ctx);
-    ring_buffer_destroy(rb);
-    teardown_radar_state(radar);
+// Encapsulates all signal routing setup.
+static int setup_signals() {
+    struct sigaction sa;
+    sa.sa_handler = handle_sigint;
+    
+    // Block other signals from interrupting the handler while it runs
+    sigemptyset(&(sa.sa_mask));
+    
+    // SA_RESTART ensures that if a signal interrupts a system call, 
+    // the system call transparently resumes instead of failing with EINTR.
+    sa.sa_flags = SA_RESTART; 
 
-    curl_global_cleanup();
+    if (sigaction(SIGINT, &sa, NULL) != 0 ||
+        sigaction(SIGTERM, &sa, NULL) != 0 ||
+        sigaction(SIGHUP, &sa, NULL) != 0)
+        return EXIT_FAILURE;
+
+    return EXIT_SUCCESS;
 }
 
 int main() {
     int exit_status = EXIT_SUCCESS;
 
-    // Catch Ctrl+C, termination requests from systemctl or kill, and terminal closures
-    signal(SIGINT, handle_sigint);
-    signal(SIGTERM, handle_sigint);
-    signal(SIGHUP, handle_sigint);
+    // Register the signals
+    if (setup_signals() != EXIT_SUCCESS) {
+        fprintf(stderr, "FATAL: Failed to register signal handlers.\n");
+        return EXIT_FAILURE;
+    }
 
-    // Curl global state needs to be initialized right at the start of the code
-    // Because its inherently not thread safe
+    // Curl global state needs to be initialized before any worker thread starts.
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
         fprintf(stderr, "Failed to initialize libcurl.\n");
         return EXIT_FAILURE;
     }
 
-    // Zero-initialize stack memory so teardown functions don't trip on garbage data
-    rx_ctx_t rx_ctx;
-    decode_ctx_t decode_ctx;
-    radar_state_ctx_t radar;
+    // Zero-initialize stack storage so cleanup helpers can safely run on early failure.
+    rx_ctx_t rx_ctx = {0};
+    decode_ctx_t decode_ctx = {0};
+    radar_state_ctx_t radar = {0};
     ring_buffer_t *rb = NULL;
     pthread_t decode_thread;
     pthread_t rx_thread;
@@ -103,24 +114,34 @@ int main() {
         // Safely shut down the decode thread that is already running
         keep_running = 0;
         ring_buffer_abort(rb);
-        pthread_join(decode_thread, NULL);
+        int decode_join_rc = pthread_join(decode_thread, NULL);
+        if (decode_join_rc != 0)
+            fprintf(stderr, "ERROR: Failed to join decode thread during RX startup rollback: %s\n", strerror(decode_join_rc));
         
         exit_status = EXIT_FAILURE;
         goto cleanup_radar;
     }
 
-    fprintf(stderr, "\n✈ Radar is LIVE. Listening for ADS-B packets. Press Ctrl+C to stop...\n\n");
+    fprintf(stderr, "\nRadar is live. Listening for ADS-B packets. Press Ctrl+C to stop...\n\n");
     
-    run_export_loop(&radar, &keep_running);
+    if (run_export_loop(&radar, &keep_running) != EXIT_SUCCESS) {
+        keep_running = 0;
+        exit_status = EXIT_FAILURE;
+    }
 
     fprintf(stderr, "\nInitiating safe shutdown...\n");
 
     // Normal shutdown path: wait for threads to finish
     ring_buffer_abort(rb);
-    pthread_join(decode_thread, NULL);
-    pthread_join(rx_thread, NULL);
+    int decode_join_rc = pthread_join(decode_thread, NULL);
+    if (decode_join_rc != 0)
+        fprintf(stderr, "ERROR: Failed to join decode thread during shutdown: %s\n", strerror(decode_join_rc));
 
-    // Cascading Cleanup Sequence
+    int rx_join_rc = pthread_join(rx_thread, NULL);
+    if (rx_join_rc != 0)
+        fprintf(stderr, "ERROR: Failed to join RX thread during shutdown: %s\n", strerror(rx_join_rc));
+
+    // Cascading cleanup sequence
 cleanup_radar:
     teardown_radar_state(&radar);
 cleanup_rb:

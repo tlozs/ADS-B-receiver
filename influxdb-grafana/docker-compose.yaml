@@ -35,19 +35,19 @@ services:
       - --mode=admin
     networks:
       - radar_net
+  
+  grafana:
+    container_name: grafana
+    image: grafana/grafana
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./resources:/var/lib/grafana/plugins/resources:ro
 
 secrets:
   admin-token:
     file: ./admin-token.json
-
-grafana:
-  image: grafana/grafana
-  container_name: grafana
-  restart: unless-stopped
-  ports:
-    - '3000:3000'
-  volumes:
-    - ./resources:/var/lib/grafana/plugins/resources:ro
 
 networks:
   radar_net:

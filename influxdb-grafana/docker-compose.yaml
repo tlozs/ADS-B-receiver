@@ -43,6 +43,15 @@ secrets:
 volumes:
   influxdb_data:
 
+grafana:
+  image: grafana/grafana
+  container_name: grafana
+  restart: unless-stopped
+  ports:
+    - '3000:3000'
+  volumes:
+    - ./resources:/var/lib/grafana/plugins/resources:ro
+
 networks:
   radar_net:
     driver: bridge

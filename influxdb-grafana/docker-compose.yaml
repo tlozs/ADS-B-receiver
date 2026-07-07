@@ -9,6 +9,7 @@ services:
     environment:
       - INFLUXDB3_ENTERPRISE_LICENSE_EMAIL=your.real.email@example.com
       - INFLUXDB3_ENTERPRISE_LICENSE_TYPE=home
+      - INFLUXDB3_LOG_FILTER=info
     command:
       - influxdb3
       - serve

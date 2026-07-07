@@ -20,7 +20,7 @@ services:
     secrets:
       - admin-token
     volumes:
-      - ./data:/var/lib/influxdb3/data
+      - influxdb_data:/var/lib/influxdb3/data
     networks:
       - radar_net
 
@@ -39,6 +39,9 @@ services:
 secrets:
   admin-token:
     file: ./admin-token.json
+
+volumes:
+  influxdb_data:
 
 networks:
   radar_net:

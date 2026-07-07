@@ -1,0 +1,45 @@
+services:
+  influxdb3-enterprise:
+    container_name: influxdb_enterprise
+    image: influxdb:3.10-enterprise
+    restart: unless-stopped
+    ports:
+      # Bound strictly to localhost to prevent UFW/iptables bypass leaks
+      - "127.0.0.1:8181:8181"
+    environment:
+      - INFLUXDB3_ENTERPRISE_LICENSE_EMAIL=your.real.email@example.com
+      - INFLUXDB3_ENTERPRISE_LICENSE_TYPE=home
+    command:
+      - influxdb3
+      - serve
+      - --node-id=pi-radar-node
+      - --cluster-id=pi-radar-cluster
+      - --object-store=file
+      - --data-dir=/var/lib/influxdb3/data
+      - --admin-token-file=/run/secrets/admin-token
+    secrets:
+      - admin-token
+    volumes:
+      - ./data:/var/lib/influxdb3/data
+    networks:
+      - radar_net
+
+  influxdb3-explorer:
+    container_name: influxdb_explorer
+    image: influxdata/influxdb3-ui
+    restart: unless-stopped
+    ports:
+      # Left open to the local network so I can view dashboards from a laptop
+      - "8888:80"
+    command:
+      - --mode=admin
+    networks:
+      - radar_net
+
+secrets:
+  admin-token:
+    file: ./admin-token.json
+
+networks:
+  radar_net:
+    driver: bridge

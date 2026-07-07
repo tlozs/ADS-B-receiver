@@ -45,6 +45,8 @@ services:
       - '3000:3000'
     volumes:
       - ./resources:/var/lib/grafana/plugins/resources:ro
+    networks:
+      - radar_net
 
 secrets:
   admin-token:

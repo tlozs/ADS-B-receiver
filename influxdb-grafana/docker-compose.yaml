@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
     ports:
       # Left open to the local network so I can view dashboards from a laptop
-      - "8888:80"
+      - "8888:8080"
     command:
       - --mode=admin
     networks:

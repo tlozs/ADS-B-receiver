@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(usrp_adsb C)
 
-# Force standard C99
-set(CMAKE_C_STANDARD 99)
+# Force standard C11
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Find System-Installed Libraries
@@ -41,6 +41,10 @@ target_compile_options(adsb_rx PRIVATE
     -Wall
     -Wextra
     -pedantic
+    # Apply -O3 only when building in Release mode
+    $<$<CONFIG:Release>:-O3>
+    # Apply -O0 (no optimization) and -g (debug symbols) in Debug mode
+    $<$<CONFIG:Debug>:-O0 -g>
 )
 
 # Link everything together.

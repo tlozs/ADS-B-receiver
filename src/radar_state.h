@@ -3,9 +3,13 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdalign.h>
 
 // The size of the aircraft repository.
 #define MAX_AIRCRAFT 1024
+
+// An aircraft is cleared from the repository, if no update happens to it for this long.
+#define AIRCRAFT_TTL 60000
 
 // The duration of an alert status in ms. 
 // If the last alert report is older than this threshold, it is no longer exported as an alert.
@@ -21,9 +25,13 @@
 // - CPR position data decoded from ADS-B, used to calculate real GPS coordinates.
 // - Flight status data about emergency and identification, determined by a latching logic at readout.
 // - Clean decoded data ready to be sent to the database.
+//
 // IMPORTANT: Time data is not epoch time, it is provided by the monotonic clock.
+// ALIGNMENT: Aligned to 64 bytes to match standard CPU L1 cache lines. 
+// This prevents "false sharing" cache contention between the decoding and 
+// exporting threads, guaranteeing optimal multicore performance.
 typedef struct {
-    pthread_mutex_t mutex;
+    alignas(64) pthread_mutex_t mutex;
 
     uint64_t last_update_ms;
     uint64_t cpr_even_time_ms;
@@ -43,6 +51,7 @@ typedef struct {
     int32_t vert_rate;
     int32_t squawk;
 
+    // TODO: because the struct is 64-byte aligned, we still can inlude data up to 192 byte without making the struct larger
     bool is_dirty;        
     bool landed;
     bool last_cpr_is_even;

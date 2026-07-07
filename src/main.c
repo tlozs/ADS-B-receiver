@@ -3,6 +3,7 @@
 #include "ring_buffer.h"
 #include "radar_state.h"
 #include "export.h"
+#include <stdatomic.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,20 +13,21 @@
 
 // TODO: error handling audit, pointer existence checks
 // TODO: unit tests?
-
 // TODO: error messages on early return exits?
 // TODO: syntax consistency check
 // TODO: comment style and wording should be professional
 
+// TODO: install instructions for influxdb, 1500 user added
+
 radar_state_ctx_t *g_radar_ctx = NULL;
 
-// Global shutdown signal flag
-volatile sig_atomic_t keep_running = 1;
+// Global shutdown signal flag, ensuring multi-thread safety
+atomic_bool keep_running = true;
 
 // Signal handler that flips the shutdown flag.
 static void handle_sigint(int dummy) {
     (void)dummy; 
-    keep_running = 0; 
+    atomic_store(&keep_running, false);
 }
 
 // Encapsulates all signal routing setup.
@@ -110,38 +112,32 @@ int main() {
     // Spawn the receiver thread
     if (spawn_rx_thread(&rx_ctx, rb, &keep_running, &rx_thread) != EXIT_SUCCESS) {
         fprintf(stderr, "Failed to spawn rx thread.\n");
-        
-        // Safely shut down the decode thread that is already running
-        keep_running = 0;
-        ring_buffer_abort(rb);
-        int decode_join_rc = pthread_join(decode_thread, NULL);
-        if (decode_join_rc != 0)
-            fprintf(stderr, "ERROR: Failed to join decode thread during RX startup rollback: %s\n", strerror(decode_join_rc));
-        
+        atomic_store(&keep_running, false);
         exit_status = EXIT_FAILURE;
-        goto cleanup_radar;
+        goto cleanup_decode_thread;
     }
 
     fprintf(stderr, "\nRadar is live. Listening for ADS-B packets. Press Ctrl+C to stop...\n\n");
     
+    // Start exporting to the database
     if (run_export_loop(&radar, &keep_running) != EXIT_SUCCESS) {
-        keep_running = 0;
+        atomic_store(&keep_running, false);
         exit_status = EXIT_FAILURE;
     }
 
     fprintf(stderr, "\nInitiating safe shutdown...\n");
 
     // Normal shutdown path: wait for threads to finish
-    ring_buffer_abort(rb);
-    int decode_join_rc = pthread_join(decode_thread, NULL);
-    if (decode_join_rc != 0)
-        fprintf(stderr, "ERROR: Failed to join decode thread during shutdown: %s\n", strerror(decode_join_rc));
-
     int rx_join_rc = pthread_join(rx_thread, NULL);
     if (rx_join_rc != 0)
         fprintf(stderr, "ERROR: Failed to join RX thread during shutdown: %s\n", strerror(rx_join_rc));
 
     // Cascading cleanup sequence
+cleanup_decode_thread:
+    ring_buffer_abort(rb);
+    int decode_join_rc = pthread_join(decode_thread, NULL);
+    if (decode_join_rc != 0)
+        fprintf(stderr, "ERROR: Failed to join decode thread during shutdown: %s\n", strerror(decode_join_rc));
 cleanup_radar:
     teardown_radar_state(&radar);
 cleanup_rb:

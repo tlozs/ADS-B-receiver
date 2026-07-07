@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
+#include <assert.h>
 
 // Retrieves the system uptime in milliseconds.
 static uint64_t get_system_tick_ms() {
@@ -13,15 +14,13 @@ static uint64_t get_system_tick_ms() {
 
     // Try the optimal clock first (Immune to sleep states)
 #ifdef CLOCK_BOOTTIME
-    if (clock_gettime(CLOCK_BOOTTIME, &ts) == 0) {
+    if (clock_gettime(CLOCK_BOOTTIME, &ts) == 0)
         return (uint64_t)(ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
-    }
 #endif
 
     // Fallback to standard POSIX monotonic (Fails to track time during sleep)
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
         return (uint64_t)(ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
-    }
 
     // If both clocks fail, log the concrete OS error and return 0.
     // The time deltas will be momentarily incorrect, but the process stays alive.
@@ -42,24 +41,21 @@ static bool is_valid_squawk(int32_t squawk) {
 
 // True if the given string only contains uppercase characters or digits or space.
 bool is_valid_callsign(const char *callsign) {
-    if (!callsign || callsign[0] == '\0') return false;
+    assert(callsign != NULL);
+    if (callsign[0] == '\0') return false;
 
-    int len = 0;
-    while (callsign[len] != '\0') {
-        // Reject overflowing strings
-        if (9 <= len) return false;
+    for (size_t i = 0; i < 9; i++) {
+        // Take care of early termination
+        if (callsign[i] == '\0') break;
 
         // Locale-independent, memory-safe bounds checking
-        char c = callsign[len];
+        char c = callsign[i];
         bool is_upper = ('A' <= c && c <= 'Z');
         bool is_digit = ('0' <= c && c <= '9');
         bool is_space = (c == ' ');
 
-        if (!is_upper && !is_digit && !is_space) return false;
-
-        len++;
+        if (!is_upper && !is_digit && !is_space) return false;        
     }
-
     // If we reach here, the string is 1-8 characters of pure, valid ASCII
     return true;
 }
@@ -80,46 +76,39 @@ static double fast_distance_meters(double lat1, double lon1, double lat2, double
 }
 
 int init_radar_state(radar_state_ctx_t *ctx) {
-    if (!ctx) {
-        fprintf(stderr, "ERROR: Cannot initialize the radar state without a valid destination pointer.\n");
-        return EXIT_FAILURE;
-    }
+    assert(ctx != NULL);
     
-    int mutex_rc = pthread_mutex_init(&(ctx->mutex), NULL);
+    int mutex_rc = pthread_mutex_init(&ctx->mutex, NULL);
     if (mutex_rc != 0) {
         fprintf(stderr, "ERROR: Failed to initialize the radar state mutex: %s\n", strerror(mutex_rc));
         return EXIT_FAILURE;
     }
 
     for (size_t i = 0; i < MAX_AIRCRAFT; i++) {
-        int repo_mutex_rc = pthread_mutex_init(&(ctx->repo[i].mutex), NULL);
+        int repo_mutex_rc = pthread_mutex_init(&ctx->repo[i].mutex, NULL);
         if (repo_mutex_rc != 0) {
             fprintf(stderr, "ERROR: Failed to initialize aircraft slot mutex %zu: %s\n", i, strerror(repo_mutex_rc));
             // Roll back previously initialized mutexes
             for (size_t j = 0; j < i; j++)
-                pthread_mutex_destroy(&(ctx->repo[j].mutex));
-            pthread_mutex_destroy(&(ctx->mutex));
+                pthread_mutex_destroy(&ctx->repo[j].mutex);
+            pthread_mutex_destroy(&ctx->mutex);
             return EXIT_FAILURE;
         }
         ctx->repo[i].icao = 0;
     }
-    precalculate_nl_table();
     return EXIT_SUCCESS;
 }
 
 void teardown_radar_state(radar_state_ctx_t *ctx) {
     if (!ctx) return;
-    pthread_mutex_destroy(&(ctx->mutex));
+    pthread_mutex_destroy(&ctx->mutex);
 
     for (size_t i = 0; i < MAX_AIRCRAFT; i++)
-        pthread_mutex_destroy(&(ctx->repo[i].mutex));
+        pthread_mutex_destroy(&ctx->repo[i].mutex);
 }
 
 aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
-    if (!ctx) {
-        fprintf(stderr, "ERROR: Cannot look up aircraft state without a valid radar context.\n");
-        return NULL;
-    }
+    assert(ctx != NULL);
     if (icao == 0) {
         fprintf(stderr, "ERROR: Cannot look up aircraft state for ICAO address 0.\n");
         return NULL;
@@ -128,22 +117,22 @@ aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
     aircraft_t *first_empty_slot = NULL;
     uint64_t now_ms = get_system_tick_ms();
 
-    pthread_mutex_lock(&(ctx->mutex));
+    pthread_mutex_lock(&ctx->mutex);
 
     for (size_t i = 0; i < MAX_AIRCRAFT; i++) {
         if (!first_empty_slot && ctx->repo[i].icao == 0)
-            first_empty_slot = &(ctx->repo[i]);
+            first_empty_slot = &ctx->repo[i];
         if (ctx->repo[i].icao == icao) {
-            pthread_mutex_lock(&(ctx->repo[i].mutex));
+            pthread_mutex_lock(&ctx->repo[i].mutex);
             ctx->repo[i].last_update_ms = now_ms;
-            pthread_mutex_unlock(&(ctx->repo[i].mutex));
-            pthread_mutex_unlock(&(ctx->mutex));        
-            return &(ctx->repo[i]);
+            pthread_mutex_unlock(&ctx->repo[i].mutex);
+            pthread_mutex_unlock(&ctx->mutex);        
+            return &ctx->repo[i];
         }
     }
 
     if (first_empty_slot) {
-        pthread_mutex_lock(&(first_empty_slot->mutex));
+        pthread_mutex_lock(&first_empty_slot->mutex);
         
         // Initialize the fresh state
         first_empty_slot->icao = icao;
@@ -173,18 +162,15 @@ aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
         first_empty_slot->wake_vortex_ca = UINT8_MAX;
         first_empty_slot->callsign[0] = '\0';
         
-        pthread_mutex_unlock(&(first_empty_slot->mutex));
+        pthread_mutex_unlock(&first_empty_slot->mutex);
     }
 
-    pthread_mutex_unlock(&(ctx->mutex));
+    pthread_mutex_unlock(&ctx->mutex);
     return first_empty_slot;
 }
 
 aircraft_t *get_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
-    if (!ctx) {
-        fprintf(stderr, "ERROR: Cannot query aircraft state without a valid radar context.\n");
-        return NULL;
-    }
+    assert(ctx != NULL);
     if (icao == 0) {
         fprintf(stderr, "ERROR: Cannot query aircraft state for ICAO address 0.\n");
         return NULL;
@@ -192,28 +178,26 @@ aircraft_t *get_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
 
     uint64_t now_ms = get_system_tick_ms();
     
-    pthread_mutex_lock(&(ctx->mutex));
+    pthread_mutex_lock(&ctx->mutex);
 
     for (size_t i = 0; i < MAX_AIRCRAFT; i++)
         if (ctx->repo[i].icao == icao) {
-            pthread_mutex_lock(&(ctx->repo[i].mutex));
+            pthread_mutex_lock(&ctx->repo[i].mutex);
             ctx->repo[i].last_update_ms = now_ms;
-            pthread_mutex_unlock(&(ctx->repo[i].mutex));
-            pthread_mutex_unlock(&(ctx->mutex));
-            return &(ctx->repo[i]);
+            pthread_mutex_unlock(&ctx->repo[i].mutex);
+            pthread_mutex_unlock(&ctx->mutex);
+            return &ctx->repo[i];
         }
 
-    pthread_mutex_unlock(&(ctx->mutex));
+    pthread_mutex_unlock(&ctx->mutex);
     return NULL;
 }
 
 size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
-    if (!ctx || !snapshot) {
-        fprintf(stderr, "ERROR: Cannot create an aircraft snapshot without valid input buffers.\n");
-        return 0;
-    }
+    assert(ctx != NULL);
+    assert(snapshot != NULL);
 
-    pthread_mutex_lock(&(ctx->mutex));
+    pthread_mutex_lock(&ctx->mutex);
 
     aircraft_t *source = ctx->repo;
     size_t active_count = 0;
@@ -223,16 +207,23 @@ size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
         if (source[i].icao != 0) {
             aircraft_t *ac = &source[i];
             
-            pthread_mutex_lock(&(ac->mutex));
+            pthread_mutex_lock(&ac->mutex);
+
+            // If ttl expired, remove from the repository
+            if (now_ms != 0 && (AIRCRAFT_TTL < now_ms - ac->last_update_ms)) {
+                ac->icao = 0;
+                pthread_mutex_unlock(&ac->mutex);
+                continue;
+            }
 
             // If Ident/Emergency was active but just expired, 
             // set dirty status, so wear-off can be recorded
-            if (ac->last_ident_ms != 0 && (STATUS_IDENT_PERSISTENCE < now_ms - ac->last_ident_ms)) {
+            if (ac->last_ident_ms != 0 && now_ms != 0 && (STATUS_IDENT_PERSISTENCE < now_ms - ac->last_ident_ms)) {
                 ac->is_dirty = true;
                 // Reset to 0 so this only triggers exactly once
                 ac->last_ident_ms = 0;
             }
-            if (ac->last_emergency_ms != 0 && (STATUS_ALERT_PERSISTENCE < now_ms - ac->last_emergency_ms)) {
+            if (ac->last_emergency_ms != 0 && now_ms != 0 && (STATUS_ALERT_PERSISTENCE < now_ms - ac->last_emergency_ms)) {
                 ac->is_dirty = true;
                 ac->last_emergency_ms = 0; 
             }
@@ -262,56 +253,56 @@ size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
                 ac->is_dirty = false;
                 active_count++;
             }
-            pthread_mutex_unlock(&(ac->mutex));
+            pthread_mutex_unlock(&ac->mutex);
         }
     }
-    pthread_mutex_unlock(&(ctx->mutex));
+    pthread_mutex_unlock(&ctx->mutex);
     return active_count;
 }
 
 // TODO: update functions too silent on failure, gap or feature? they could return success instead
 
 void update_aircraft_landed(aircraft_t *ac, bool new_status) {
-    if (!ac) return;
+    assert(ac != NULL);
 
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
 
     ac->landed = new_status;
     
     ac->is_dirty = true;
     ac->last_update_ms = get_system_tick_ms();
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 void update_aircraft_emergency(aircraft_t *ac) {
-    if (!ac) return;
+    assert(ac != NULL);
 
     uint64_t now_ms = get_system_tick_ms();
 
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
 
     ac->last_emergency_ms = now_ms;
     
     ac->is_dirty = true;
     ac->last_update_ms = now_ms;
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 void update_aircraft_ident(aircraft_t *ac) {
-    if (!ac) return;
+    assert(ac != NULL);
 
     uint64_t now_ms = get_system_tick_ms();
 
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
 
     ac->last_ident_ms = now_ms;
     
     ac->is_dirty = true;
     ac->last_update_ms = now_ms;
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 void update_aircraft_flightstatus(aircraft_t *ac, int32_t fs) {
@@ -330,11 +321,11 @@ void update_aircraft_survstatus(aircraft_t *ac, int32_t ss) {
 
 void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bool is_even) {
     // TODO: if previous data is available, decode from a single message?
-    if (!ac) return;
+    assert(ac != NULL);
 
     uint64_t now_ms = get_system_tick_ms();
 
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
     
     // Update the respective data based on the flag
     if (is_even) {
@@ -374,8 +365,8 @@ void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bo
 
             if (success) {
                 // Validate the decoded data
-                if (-90.0 < final_lat && final_lat < 90.0 && 
-                    -180.0 < final_lon && final_lon < 180.0 &&
+                if (-90.0 <= final_lat && final_lat <= 90.0 && 
+                    -180.0 <= final_lon && final_lon <= 180.0 &&
                     !(final_lat == 0.0 && final_lon == 0.0)) {
 
                     // If previous data is available, perform a 100km distance check
@@ -392,11 +383,11 @@ void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bo
     ac->is_dirty = true;
     ac->last_update_ms = now_ms;
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 void update_aircraft_altitude(aircraft_t *ac, int32_t alt, int32_t unit, bool is_gnss) {
-    if (!ac) return;
+    assert(ac != NULL);
 
     if (unit == MODE_S_UNIT_METERS)
         alt = (int)(alt * 3.28084);
@@ -404,7 +395,7 @@ void update_aircraft_altitude(aircraft_t *ac, int32_t alt, int32_t unit, bool is
     // skip unreasonable altitude levels
     if (alt <= -2000 || 100000 <= alt) return;
         
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
     
     if (is_gnss)
         ac->alt_geom = alt;
@@ -414,18 +405,18 @@ void update_aircraft_altitude(aircraft_t *ac, int32_t alt, int32_t unit, bool is
     ac->is_dirty = true;
     ac->last_update_ms = get_system_tick_ms();
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 void update_aircraft_velocity(aircraft_t *ac, int32_t velocity, bool is_to_air, int32_t heading, int32_t vert_rate) {
-    if (!ac) return;
+    assert(ac != NULL);
 
     // skip impossible kinematics
     if (velocity <= 0 || 3000 <= velocity) return;
     if (heading < 0 || 360 < heading) return;
     if (vert_rate < -25000 || 25000 < vert_rate) return;
 
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
     
     if (is_to_air)
         ac->velocity_to_air = velocity;
@@ -437,29 +428,30 @@ void update_aircraft_velocity(aircraft_t *ac, int32_t velocity, bool is_to_air, 
     ac->is_dirty = true;
     ac->last_update_ms = get_system_tick_ms();
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 void update_aircraft_squawk(aircraft_t *ac, int32_t squawk) {
-    if (!ac || !is_valid_squawk(squawk)) return;
+    assert(ac != NULL);
+    if (!is_valid_squawk(squawk)) return;
 
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
     
     ac->squawk = squawk;
     
     ac->is_dirty = true;
     ac->last_update_ms = get_system_tick_ms();
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 void update_aircraft_wakevortex(aircraft_t *ac, uint8_t tc, uint8_t ca) {
-    if (!ac) return;
+    assert(ac != NULL);
 
     // skip invalid codes
     if (4 < tc || 7 < ca) return;
 
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
     
     ac->wake_vortex_tc = tc;
     ac->wake_vortex_ca = ca;
@@ -467,13 +459,14 @@ void update_aircraft_wakevortex(aircraft_t *ac, uint8_t tc, uint8_t ca) {
     ac->is_dirty = true;
     ac->last_update_ms = get_system_tick_ms();
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 void update_aircraft_callsign(aircraft_t *ac, const char *callsign) {
-    if (!ac || !is_valid_callsign(callsign)) return;
+    assert(ac != NULL);
+    if (!is_valid_callsign(callsign)) return;
 
-    pthread_mutex_lock(&(ac->mutex));
+    pthread_mutex_lock(&ac->mutex);
     
     strncpy(ac->callsign, callsign, sizeof(ac->callsign) - 1);
     ac->callsign[sizeof(ac->callsign) - 1] = '\0';
@@ -481,16 +474,15 @@ void update_aircraft_callsign(aircraft_t *ac, const char *callsign) {
     ac->is_dirty = true;
     ac->last_update_ms = get_system_tick_ms();
     
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 }
 
 bool is_aircraft_landed(aircraft_t *ac) {
-    if (!ac) return false;
-    pthread_mutex_lock(&(ac->mutex));
+    assert(ac != NULL);
 
+    pthread_mutex_lock(&ac->mutex);
     bool result = ac->landed;
-    
-    pthread_mutex_unlock(&(ac->mutex));
+    pthread_mutex_unlock(&ac->mutex);
 
     return result;
 }

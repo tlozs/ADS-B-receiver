@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <assert.h>
 
 #define EXECUTE_OR_GOTO(label, ...) \
     if (__VA_ARGS__) {              \
@@ -22,10 +23,8 @@
     }
 
 int init_usrp(rx_ctx_t *ctx) {
-    if (!ctx) {
-        fprintf(stderr, "ERROR: Cannot initialize the SDR context without a valid destination pointer.\n");
-        return EXIT_FAILURE;
-    }
+    assert(ctx != NULL);
+    
     ctx->verbose = false;
 
     // Define configuration values
@@ -54,11 +53,11 @@ int init_usrp(rx_ctx_t *ctx) {
 
     // Create USRP
     fprintf(stderr, "Creating USRP...\n");
-    EXECUTE_OR_GOTO(return_error, uhd_usrp_make(&(ctx->usrp), ""))
+    EXECUTE_OR_GOTO(return_error, uhd_usrp_make(&ctx->usrp, ""))
 
     // Create RX streamer and metadata
-    EXECUTE_OR_GOTO(free_usrp, uhd_rx_streamer_make(&(ctx->rx_streamer)))
-    EXECUTE_OR_GOTO(free_rx_streamer, uhd_rx_metadata_make(&(ctx->md)))
+    EXECUTE_OR_GOTO(free_usrp, uhd_rx_streamer_make(&ctx->rx_streamer))
+    EXECUTE_OR_GOTO(free_rx_streamer, uhd_rx_metadata_make(&ctx->md))
 
     // Set rate and check its value
     fprintf(stderr, "Setting RX Rate: %f...\n", rate);
@@ -83,12 +82,12 @@ int init_usrp(rx_ctx_t *ctx) {
     EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_stream(ctx->usrp, &stream_args, ctx->rx_streamer))
     
     // Get the max number of samples to use as a base for buffer size
-    EXECUTE_OR_GOTO(free_rx_metadata, uhd_rx_streamer_max_num_samps(ctx->rx_streamer, &(ctx->samps_per_buff)))
+    EXECUTE_OR_GOTO(free_rx_metadata, uhd_rx_streamer_max_num_samps(ctx->rx_streamer, &ctx->samps_per_buff))
     fprintf(stderr, "Buffer size in samples: %zu\n", ctx->samps_per_buff);
 
     ctx->trash_buffer = malloc(ctx->samps_per_buff * 2 * sizeof(int16_t));
     if (ctx->trash_buffer)
-        return 0;
+        return EXIT_SUCCESS;
     else {
         fprintf(stderr, "ERROR: Failed to allocate the SDR trash buffer.\n");
         return_code = EXIT_FAILURE;
@@ -96,17 +95,17 @@ int init_usrp(rx_ctx_t *ctx) {
     
 free_rx_metadata:
     if (ctx->verbose) fprintf(stderr, "Cleaning up RX metadata.\n");
-    uhd_rx_metadata_free(&(ctx->md));
+    uhd_rx_metadata_free(&ctx->md);
 free_rx_streamer:
     if (ctx->verbose) fprintf(stderr, "Cleaning up RX streamer.\n");
-    uhd_rx_streamer_free(&(ctx->rx_streamer));
+    uhd_rx_streamer_free(&ctx->rx_streamer);
 free_usrp:
     if (ctx->verbose) fprintf(stderr, "Cleaning up USRP.\n");
     if (return_code != EXIT_SUCCESS && ctx->usrp != NULL) {
         uhd_usrp_last_error(ctx->usrp, error_string, 512);
         fprintf(stderr, "USRP reported the following error: %s\n", error_string);
     }
-    uhd_usrp_free(&(ctx->usrp));
+    uhd_usrp_free(&ctx->usrp);
 return_error:
 
     fprintf(stderr, (return_code ? "Failure\n" : "Success\n"));
@@ -118,19 +117,18 @@ void teardown_usrp(rx_ctx_t *ctx) {
 
     if (ctx->verbose) fprintf(stderr, "Tearing down SDR hardware...\n");
     
-    if (ctx->trash_buffer) free(ctx->trash_buffer);
-    if (ctx->md) uhd_rx_metadata_free(&(ctx->md));
-    if (ctx->rx_streamer) uhd_rx_streamer_free(&(ctx->rx_streamer));
-    if (ctx->usrp) uhd_usrp_free(&(ctx->usrp));
+    free(ctx->trash_buffer);
+    if (ctx->md) uhd_rx_metadata_free(&ctx->md);
+    if (ctx->rx_streamer) uhd_rx_streamer_free(&ctx->rx_streamer);
+    if (ctx->usrp) uhd_usrp_free(&ctx->usrp);
 }
 
 // Issues a stream command to the SDR and receives data into the ring buffer
 // until shutdown is requested.
-static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
-    if (!ctx || !rb || !keep_running) {
-        fprintf(stderr, "ERROR: RX stream loop started without valid context, buffer, or shutdown flag.\n");
-        return;
-    }
+static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_running) {
+    assert(ctx != NULL);
+    assert(rb != NULL);
+    assert(keep_running != NULL);
 
     uhd_stream_cmd_t stream_cmd = {
         .stream_mode = UHD_STREAM_MODE_START_CONTINUOUS,
@@ -140,12 +138,10 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
     fprintf(stderr, "Issuing stream command.\n");
     if (uhd_rx_streamer_issue_stream_cmd(ctx->rx_streamer, &stream_cmd) != 0) {
         fprintf(stderr, "Failed to issue stream command.\n");
-        *keep_running = 0;
-        ring_buffer_abort(rb);
-        return;
+        goto fatal_error;
     }
     
-    while (*keep_running) {
+    while (atomic_load(keep_running)) {
         // Attempt to acquire the ring buffer
         iq_samps_block_t *block = ring_buffer_acquire_write(rb);
         int16_t *target_buff = NULL;
@@ -166,11 +162,9 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
         size_t num_rx_samps = 0;
         
         // Receive directly into the shared memory
-        if (uhd_rx_streamer_recv(ctx->rx_streamer, buffs_ptr, ctx->samps_per_buff, &(ctx->md), 3.0, false, &num_rx_samps) != 0) {
+        if (uhd_rx_streamer_recv(ctx->rx_streamer, buffs_ptr, ctx->samps_per_buff, &ctx->md, 3.0, false, &num_rx_samps) != 0) {
             fprintf(stderr, "FATAL: Streamer receive API failed.\n");
-            *keep_running = 0;
-            ring_buffer_abort(rb);
-            break;
+            goto fatal_error;
         }
         
         // Evaluate hardware status for any error
@@ -178,9 +172,7 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
         uhd_rx_metadata_error_code(ctx->md, &error_code);
         if (error_code == UHD_RX_METADATA_ERROR_CODE_TIMEOUT) {
             fprintf(stderr, "FATAL: RX Stream timeout. Hardware disconnected?\n");
-            *keep_running = 0;
-            ring_buffer_abort(rb);
-            break;
+            goto fatal_error;
         // Treat other codes (like OUT_OF_SEQUENCE drops) as warnings, let the loop recover
         } else if (error_code != UHD_RX_METADATA_ERROR_CODE_NONE)
             fprintf(stderr, "WARNING: UHD stream reported error code 0x%x. Recovering...\n", error_code);
@@ -191,6 +183,11 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
         if (!dropping_packet && 0 < num_rx_samps)
             ring_buffer_commit_write(rb, num_rx_samps);
     }
+
+    return;
+fatal_error:
+    atomic_store(keep_running, false);
+    ring_buffer_abort(rb);
 }
 
 // ============================================================================
@@ -201,28 +198,28 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t
 typedef struct {
     rx_ctx_t *ctx;
     ring_buffer_t *rb;
-    volatile sig_atomic_t *keep_running;
+    atomic_bool *keep_running;
 } rx_thread_args_t;
 
 // The unpacker function to call do_rx_stream with the correct arguments.
 // It is explicitly marked 'static' so it is locked to this file.
 static void *rx_thread_func(void *arg) {
     rx_thread_args_t *args = (rx_thread_args_t*)arg;
-    if (!args || !args->ctx || !args->rb || !args->keep_running) {
-        fprintf(stderr, "ERROR: RX thread started without valid thread arguments.\n");
-        free(args);
-        return NULL;
-    }
+    assert(args != NULL);
+    assert(args->ctx != NULL);
+    assert(args->rb != NULL);
+    assert(args->keep_running != NULL);
+    
     do_rx_stream(args->ctx, args->rb, args->keep_running);
     free(args);
     return NULL;
 }
 
-int spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running, pthread_t *out_thread) {
-    if (!ctx || !rb || !keep_running || !out_thread) {
-        fprintf(stderr, "ERROR: Cannot spawn the RX thread without valid context, ring buffer, shutdown flag, and output handle.\n");
-        return EXIT_FAILURE;
-    }
+int spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_running, pthread_t *out_thread) {
+    assert(ctx != NULL);
+    assert(rb != NULL);
+    assert(keep_running != NULL);
+    assert(out_thread != NULL);
     
     // malloc is needed for the payload to survive the stack cleanup
     rx_thread_args_t *args = malloc(sizeof(rx_thread_args_t));

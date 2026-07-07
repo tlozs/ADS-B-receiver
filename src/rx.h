@@ -4,7 +4,7 @@
 #include <uhd.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <signal.h>
+#include <stdatomic.h>
 
 // Context necessary for receiving stream data through the SDR.
 typedef struct {
@@ -24,4 +24,4 @@ void teardown_usrp(rx_ctx_t *ctx);
 
 // Acts as a wrapper function for do_rx_stream, spawning it in its own dedicated thread.
 // Hides the ugly payload crafting and wrapper function of the thread creation logic.
-int spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running, pthread_t *out_thread);
+int spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_running, pthread_t *out_thread);

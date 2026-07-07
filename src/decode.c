@@ -4,20 +4,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <assert.h>
 
 #define OVERLAP_SAMPLES 240
 
 static void convert_sc16_to_u8(const int16_t *restrict src, uint8_t *restrict dest, size_t buff_size) {
-    for (size_t i = 0; i < buff_size; ++i) {
+    assert(src != NULL);
+    assert(dest != NULL);
+    for (size_t i = 0; i < buff_size; ++i)
         dest[i] = (uint8_t)(((uint16_t)src[i] >> 8) + 128);
-    }
 }
 
 int init_decode(decode_ctx_t *ctx, size_t samps_per_buff) {
-    if (!ctx) {
-        fprintf(stderr, "ERROR: Cannot initialize the decode context without a valid destination pointer.\n");
-        return EXIT_FAILURE;
-    }
+    assert(ctx != NULL);
     if (samps_per_buff == 0) {
         fprintf(stderr, "ERROR: Cannot initialize the decode context with a zero-sized sample buffer.\n");
         return EXIT_FAILURE;
@@ -55,6 +54,8 @@ void teardown_decode(decode_ctx_t *ctx) {
 // Determines if the message is transmitted from an aircraft that is certainly in the air.
 // Decides based on the Downlink Format, Flight Status information, Capability code and ADS-B Type Code.
 static bool determine_certainly_airborne(struct mode_s_msg *mm) {
+    assert(mm != NULL);
+
     // ACAS replies are only transmitted when airborne
     if(mm->msgtype == 0 || mm->msgtype == 16) return true;
 
@@ -81,6 +82,8 @@ static bool determine_certainly_airborne(struct mode_s_msg *mm) {
 // Determines if the message is transmitted from an aircraft that is certainly on the ground.
 // Decides based on the Downlink Format, Flight Status information, Capability code and ADS-B Type Code.
 static bool determine_certainly_on_ground(struct mode_s_msg *mm) {
+    assert(mm != NULL);
+
     // Mode S Surveillance replies and Comm-B replies are certainly from ground, when FS=1 or FS=3
     if(mm->msgtype == 4 || mm->msgtype == 5 || mm->msgtype == 20 || mm->msgtype == 21) 
         if(mm->fs == 1 || mm->fs == 3) return true;
@@ -107,12 +110,8 @@ static bool determine_certainly_on_ground(struct mode_s_msg *mm) {
 // We intend to only track aircraft that is in the air, therefore a filtering is performed.
 static void on_message(mode_s_t *mode_s, struct mode_s_msg *mm) {
     (void)mode_s; // Suppress unused warning
-
-    // Only process if radar context is set up
-    if (!g_radar_ctx) {
-        fprintf(stderr, "Global radar context is not set up, unable to process messages!\n");
-        return;
-    }
+    assert(mm != NULL);
+    assert(g_radar_ctx != NULL);
 
     uint32_t icao = (mm->aa1 << 16) | (mm->aa2 << 8) | mm->aa3;
     aircraft_t *ac = NULL;
@@ -208,9 +207,12 @@ static void on_message(mode_s_t *mode_s, struct mode_s_msg *mm) {
 }
 
 // Starts decoding data from the ring buffer until keep_running remains true.
-static void do_decode(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running) {
+static void do_decode(decode_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_running) {
+    assert(ctx != NULL);
+    assert(rb != NULL);
+    assert(keep_running != NULL);
 
-    while (*keep_running) {
+    while (atomic_load(keep_running)) {
         // Safely acquire the block
         iq_samps_block_t *block = ring_buffer_acquire_read(rb);
         
@@ -247,28 +249,28 @@ static void do_decode(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_
 typedef struct {
     decode_ctx_t *ctx;
     ring_buffer_t *rb;
-    volatile sig_atomic_t *keep_running;
+    atomic_bool *keep_running;
 } decode_thread_args_t;
 
 // The unpacker function to call do_rx_stream with the correct arguments.
 // It is explicitly marked 'static' so it is locked to this file.
 static void *decode_thread_func(void *arg) {
     decode_thread_args_t *args = (decode_thread_args_t*)arg;
-    if (!args || !args->ctx || !args->rb || !args->keep_running) {
-        fprintf(stderr, "ERROR: Decode thread started without valid thread arguments.\n");
-        free(args);
-        return NULL;
-    }
+    assert(args != NULL);
+    assert(args->ctx != NULL);
+    assert(args->rb != NULL);
+    assert(args->keep_running != NULL);
+
     do_decode(args->ctx, args->rb, args->keep_running);
     free(args);
     return NULL;
 }
 
-int spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running, pthread_t *out_thread) {
-    if (!ctx || !rb || !keep_running || !out_thread) {
-        fprintf(stderr, "ERROR: Cannot spawn the decode thread without valid context, ring buffer, shutdown flag, and output handle.\n");
-        return EXIT_FAILURE;
-    }
+int spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_running, pthread_t *out_thread) {
+    assert(ctx != NULL);
+    assert(rb != NULL);
+    assert(keep_running != NULL);
+    assert(out_thread != NULL);
     
     // malloc is needed for the payload to survive the stack cleanup
     decode_thread_args_t *args = malloc(sizeof(decode_thread_args_t));

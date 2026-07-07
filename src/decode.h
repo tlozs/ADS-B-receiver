@@ -4,7 +4,7 @@
 #include <mode-s.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <signal.h>
+#include <stdatomic.h>
 
 // Context necessary for decoding data from the ring buffer.
 typedef struct {
@@ -25,4 +25,4 @@ void teardown_decode(decode_ctx_t *ctx);
 
 // Acts as a wrapper function for do_decode, spawning it in its own dedicated thread.
 // Hides the ugly payload crafting and wrapper function of the thread creation logic.
-int spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, volatile sig_atomic_t *keep_running, pthread_t *out_thread);
+int spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_running, pthread_t *out_thread);

@@ -52,7 +52,20 @@ static int setup_signals() {
     return EXIT_SUCCESS;
 }
 
-int main() {
+int main(int argc, char **argv) {
+    bool run_benchmark = false;
+    time_t benchmark_start = 0;
+    time_t benchmark_end = 0;
+
+    // Check for the benchmark flag
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--benchmark") == 0) {
+            run_benchmark = true;
+            break; 
+        }
+    }
+
+
     int exit_status = EXIT_SUCCESS;
 
     // Register the signals
@@ -110,7 +123,7 @@ int main() {
         exit_status = EXIT_FAILURE;
         goto cleanup_radar;
     }
-
+    
     // Spawn the receiver thread
     if (spawn_rx_thread(&rx_ctx, rb, &keep_running, &rx_thread) != EXIT_SUCCESS) {
         fprintf(stderr, "Failed to spawn rx thread.\n");
@@ -118,16 +131,47 @@ int main() {
         exit_status = EXIT_FAILURE;
         goto cleanup_decode_thread;
     }
-
+    
     fprintf(stderr, "\nRadar is live. Listening for ADS-B packets. Press Ctrl+C to stop...\n\n");
     
+    if (run_benchmark) {
+        signal(SIGALRM, handle_sigint); 
+        alarm(300); 
+        benchmark_start = time(NULL);
+        fprintf(stderr, "\n>>> Benchmark mode enabled: Daemon will auto-terminate in 5 minutes. <<<\n\n");
+    }
+
     // Start exporting to the database
     if (run_export_loop(&radar, &keep_running) != EXIT_SUCCESS) {
         atomic_store(&keep_running, false);
         exit_status = EXIT_FAILURE;
     }
 
+    if (run_benchmark) benchmark_end = time(NULL);
+
     fprintf(stderr, "\nInitiating safe shutdown...\n");
+
+    if (run_benchmark && benchmark_start != 0 && benchmark_end != 0) {
+        char start_str[32], end_str[32];
+        
+        // Format timestamps to InfluxDB RFC3339 format (UTC)
+        strftime(start_str, sizeof(start_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&benchmark_start));
+        strftime(end_str, sizeof(end_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&benchmark_end));
+
+        printf("\n========================================================================\n");
+        printf("BENCHMARK COMPLETE. RUN THESE QUERIES IN INFLUXDB TO ANALYZE RESULTS:\n");
+        printf("========================================================================\n\n");
+        
+        printf("-- 1. Total Unique Aircraft (Capacity Test)\n");
+        printf("SELECT count(DISTINCT(\"icao\")) FROM \"aircraft\" WHERE \"lat\" IS NOT NULL AND time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
+        
+        printf("-- 2. Total Telemetry Rows (Reliability Test)\n");
+        printf("SELECT count(\"lat\") FROM \"aircraft\" WHERE time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
+        
+        printf("-- 3. Maximum Geographic Range (Horizon Test)\n");
+        printf("SELECT min(\"lat\"), max(\"lat\"), min(\"lon\"), max(\"lon\") FROM \"aircraft\" WHERE time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
+        printf("========================================================================\n\n");
+    }
 
     // Normal shutdown path: wait for threads to finish
     int rx_join_rc = pthread_join(rx_thread, NULL);

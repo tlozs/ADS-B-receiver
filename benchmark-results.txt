@@ -1,0 +1,38 @@
+Benchmark results indoors:
+
+GAIN: 20
+    distinct ICAO: 5
+    number of 'lat' messages: 224
+    coordinate extremes: min-lat:48.57912 max-lat:49.59168	min-lon:8.22341 max-lon:8.79217
+GAIN: 23
+    distinct ICAO: 7
+    number of 'lat' messages: 534
+    coordinate extremes: min-lat:48.29627 max-lat:49.60793	min-lon:8.14275 max-lon:9.21637
+GAIN: 26
+    distinct ICAO: 22
+    number of 'lat' messages: 1499
+    coordinate extremes: min-lat:47.57117 max-lat:50.147	min-lon:8.03852 max-lon:9.05208
+GAIN: 29
+    distinct ICAO: 27
+    number of 'lat' messages: 3108
+    coordinate extremes: min-lat:48.4416 max-lat:49.95311	min-lon:8.07257 max-lon:9.77627
+GAIN: 32
+    distinct ICAO: 28
+    number of 'lat' messages: 2482
+    coordinate extremes: min-lat:47.74791 max-lat:50.07368	min-lon:8.04354 max-lon:10.04343
+GAIN: 35
+    distinct ICAO: 33
+    number of 'lat' messages: 2010
+    coordinate extremes: min-lat:47.46657 max-lat:50.50466	min-lon:7.89505 max-lon:10.11552
+GAIN: 38
+    distinct ICAO: 24
+    number of 'lat' messages: 1667
+    coordinate extremes: min-lat:48.1897 max-lat:50.25879	min-lon:8.02164 max-lon:10.01567
+GAIN: 41
+    distinct ICAO: 25
+    number of 'lat' messages: 1939
+    coordinate extremes: min-lat:48.16946 max-lat:50.13318	min-lon:7.99551 max-lon:9.81202
+GAIN: 44
+    distinct ICAO: 16
+    number of 'lat' messages: 873
+    coordinate extremes: min-lat:47.85315 max-lat:50.22624	min-lon:8.14925 max-lon:9.55353

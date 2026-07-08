@@ -372,6 +372,7 @@ void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bo
                         fast_distance_meters(ac->lat, ac->lon, final_lat, final_lon) < 100000) {
                         ac->lat = final_lat;
                         ac->lon = final_lon;
+                        atomic_fetch_add(&g_radar_ctx->valid_telemetry_count, 1);
                     }
                 }
             }

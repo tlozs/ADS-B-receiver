@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdalign.h>
+#include <stdatomic.h>
 
 // The size of the aircraft repository.
 #define MAX_AIRCRAFT 1024
@@ -86,6 +87,7 @@ typedef struct {
 typedef struct {
     aircraft_t repo[MAX_AIRCRAFT];
     pthread_mutex_t mutex;
+    atomic_int valid_telemetry_count;
 } radar_state_ctx_t;
 
 // The global pointer to the radar state context, needed inside the on_message callback.

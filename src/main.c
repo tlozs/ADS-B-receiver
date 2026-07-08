@@ -10,6 +10,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <curl/curl.h>
+#include <assert.h>
 
 radar_state_ctx_t *g_radar_ctx = NULL;
 
@@ -42,41 +43,30 @@ static int setup_signals() {
     return EXIT_SUCCESS;
 }
 
-static void print_benchmark_results(time_t start, time_t end) {
-    char start_str[32], end_str[32];
-        
-        // Format timestamps to InfluxDB RFC3339 format (UTC)
-    strftime(start_str, sizeof(start_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&start));
-    strftime(end_str, sizeof(end_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&end));
+static void print_benchmark_results(radar_state_ctx_t *ctx) {
+    assert(ctx != NULL);
+
+    int total_valid_coords = atomic_load(&ctx->valid_telemetry_count);
 
     fprintf(stderr, "\n========================================================================\n");
-    fprintf(stderr, "BENCHMARK COMPLETE. RUN THESE QUERIES IN INFLUXDB TO ANALYZE RESULTS:\n");
+    fprintf(stderr, "                           BENCHMARK COMPLETE\n");
     fprintf(stderr, "========================================================================\n\n");
-    
-    fprintf(stderr, "-- 1. Total Unique Aircraft (Capacity Test)\n");
-    fprintf(stderr, "SELECT count(DISTINCT(\"icao\")) FROM \"aircraft\" WHERE \"lat\" IS NOT NULL AND time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
-    
-    fprintf(stderr, "-- 2. Total Telemetry Rows (Reliability Test)\n");
-    fprintf(stderr, "SELECT count(\"lat\") FROM \"aircraft\" WHERE time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
-    
-    fprintf(stderr, "-- 3. Maximum Geographic Range (Horizon Test)\n");
-    fprintf(stderr, "SELECT min(\"lat\"), max(\"lat\"), min(\"lon\"), max(\"lon\") FROM \"aircraft\" WHERE time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
+    fprintf(stderr, " Total Valid CPR Packets Decoded: %d\n", total_valid_coords);
+    fprintf(stderr, " Average Decode Rate: %.2f packets/sec\n", total_valid_coords / 300.0);
     fprintf(stderr, "========================================================================\n\n");
 }
 
 int main(int argc, char **argv) {
     bool run_benchmark = false;
-    time_t benchmark_start = 0;
-    time_t benchmark_end = 0;
+    bool run_autotune = false;
 
-    // Check for the benchmark flag
+    // Check for the benchmark and autotune flag
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--benchmark") == 0) {
+        if (strcmp(argv[i], "--benchmark") == 0)
             run_benchmark = true;
-            break; 
-        }
+        if (strcmp(argv[i], "--autotune") == 0)
+            run_autotune = true;
     }
-
 
     int exit_status = EXIT_SUCCESS;
 
@@ -155,11 +145,14 @@ int main(int argc, char **argv) {
         exit_status = EXIT_FAILURE;
         goto cleanup_decode_thread;
     }
+
+    if (run_autotune)
+        run_auto_tune(&rx_ctx, &radar);
     
     if (run_benchmark) {
         signal(SIGALRM, handle_sigint); 
+        atomic_store(&radar.valid_telemetry_count, 0);
         alarm(300); 
-        benchmark_start = time(NULL);
         fprintf(stderr, "\n>>> Benchmark mode enabled: Daemon will auto-terminate in 5 minutes. <<<\n\n");
     }
 
@@ -169,12 +162,10 @@ int main(int argc, char **argv) {
         exit_status = EXIT_FAILURE;
     }
 
-    if (run_benchmark) benchmark_end = time(NULL);
-
     fprintf(stderr, "\nInitiating safe shutdown...\n");
 
-    if (run_benchmark && exit_status == EXIT_SUCCESS && benchmark_start != 0 && benchmark_end != 0)
-        print_benchmark_results(benchmark_start, benchmark_end);
+    if (run_benchmark && exit_status == EXIT_SUCCESS)
+        print_benchmark_results(&radar);
 
     // Normal shutdown path: wait for threads to finish
     int rx_join_rc = pthread_join(rx_thread, NULL);

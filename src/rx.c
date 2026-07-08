@@ -9,6 +9,7 @@
  */
 
 #include "rx.h"
+#include "radar_state.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -16,20 +17,40 @@
 #include <unistd.h>
 #include <assert.h>
 
+#define GAIN_CONFIG_FILE "sdr_gain.conf"
+
 #define EXECUTE_OR_GOTO(label, ...) \
     if (__VA_ARGS__) {              \
         return_code = EXIT_FAILURE; \
         goto label;                 \
     }
 
+static double load_saved_gain(double fallback_default) {
+    double saved_gain = fallback_default;
+    FILE *f = fopen(GAIN_CONFIG_FILE, "r");
+    
+    if (f != NULL) {
+        if (fscanf(f, "%lf", &saved_gain) != 1) {
+            fprintf(stderr, "WARNING: '" GAIN_CONFIG_FILE "' is corrupted. Using default.\n");
+            saved_gain = fallback_default;
+        }
+        fclose(f);
+    } else {
+        fprintf(stderr, "No '" GAIN_CONFIG_FILE "' found. Using default.\n");
+    }
+    
+    return saved_gain;
+}
+
 int init_usrp(rx_ctx_t *ctx) {
     assert(ctx != NULL);
 
     // Define configuration values
+    ctx->channel         = 0;
+    ctx->default_gain    = 29.0;
     double freq          = 1090e6;
     double rate          = 2e6;
-    double gain          = 29;
-    size_t channel       = 0;
+    double gain          = load_saved_gain(ctx->default_gain);
     int return_code      = EXIT_SUCCESS;
     char error_string[512];
 
@@ -45,7 +66,7 @@ int init_usrp(rx_ctx_t *ctx) {
         .cpu_format = "sc16",
         .otw_format = "sc16",
         .args = "",
-        .channel_list = &channel,
+        .channel_list = &ctx->channel,
         .n_channels = 1
     };
 
@@ -58,24 +79,24 @@ int init_usrp(rx_ctx_t *ctx) {
 
     // Set rate and check its value
     fprintf(stderr, "Setting RX Rate: %f...\n", rate);
-    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_set_rx_rate(ctx->usrp, rate, channel))
-    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_rate(ctx->usrp, channel, &rate))
+    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_set_rx_rate(ctx->usrp, rate, ctx->channel))
+    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_rate(ctx->usrp, ctx->channel, &rate))
     fprintf(stderr, "Actual RX Rate: %f...\n", rate);
 
     // Set gain and check its value
     fprintf(stderr, "Setting RX Gain: %f dB...\n", gain);
-    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_set_rx_gain(ctx->usrp, gain, channel, ""))
-    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_gain(ctx->usrp, channel, "", &gain))
+    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_set_rx_gain(ctx->usrp, gain, ctx->channel, ""))
+    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_gain(ctx->usrp, ctx->channel, "", &gain))
     fprintf(stderr, "Actual RX Gain: %f...\n", gain);
 
     // Set frequency and check its value
     fprintf(stderr, "Setting RX frequency: %f MHz...\n", freq / 1e6);
-    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_set_rx_freq(ctx->usrp, &tune_request, channel, &tune_result))
-    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_freq(ctx->usrp, channel, &freq))
+    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_set_rx_freq(ctx->usrp, &tune_request, ctx->channel, &tune_result))
+    EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_freq(ctx->usrp, ctx->channel, &freq))
     fprintf(stderr, "Actual RX frequency: %f MHz...\n", freq / 1e6);
     
     // Set up streamer
-    stream_args.channel_list = &channel;
+    stream_args.channel_list = &ctx->channel;
     EXECUTE_OR_GOTO(free_rx_metadata, uhd_usrp_get_rx_stream(ctx->usrp, &stream_args, ctx->rx_streamer))
     
     // Get the max number of samples to use as a base for buffer size
@@ -112,6 +133,66 @@ void teardown_usrp(rx_ctx_t *ctx) {
     if (ctx->md) uhd_rx_metadata_free(&ctx->md);
     if (ctx->rx_streamer) uhd_rx_streamer_free(&ctx->rx_streamer);
     if (ctx->usrp) uhd_usrp_free(&ctx->usrp);
+}
+
+void run_auto_tune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx) {
+    assert(rx_ctx != NULL);
+    assert(radar_ctx != NULL);
+
+    // Define the sweep range
+    double test_gains[] = {20.0, 23.0, 26.0, 29.0, 32.0, 35.0, 38.0, 41.0, 44.0};
+    int num_gains = sizeof(test_gains) / sizeof(test_gains[0]);
+    
+    double best_gain = rx_ctx->default_gain;
+    int max_messages = 0;
+
+    fprintf(stderr, "\n==================================================\n");
+    fprintf(stderr, " INITIATING SDR AUTO-TUNE SEQUENCE (60s per step)\n");
+    fprintf(stderr, "==================================================\n");
+
+    for (int i = 0; i < num_gains; i++) {
+        double current_gain = test_gains[i];
+        
+        // Command the UHD hardware to change gain on the fly
+        uhd_usrp_set_rx_gain(rx_ctx->usrp, current_gain, rx_ctx->channel, "");
+        uhd_usrp_get_rx_gain(rx_ctx->usrp, rx_ctx->channel, "", &current_gain);
+        fprintf(stderr, "RX gain set to %.2f dB\n", current_gain);
+        
+        // Reset the RAM counter for this specific test block
+        atomic_store(&radar_ctx->valid_telemetry_count, 0);
+
+        fprintf(stderr, "Testing gain %.2f dB... ", current_gain);
+        
+        // Put the main thread to sleep.
+        // The rx_thread and decode_thread continue running at maximum speed
+        sleep(60); 
+
+        // Harvest the results
+        int messages_caught = atomic_load(&radar_ctx->valid_telemetry_count);
+        fprintf(stderr, "Captured %4d valid telemetry packets.\n", messages_caught);
+
+        // 5. Track the peak of the plateau
+        if (max_messages < messages_caught) {
+            max_messages = messages_caught;
+            best_gain = current_gain;
+        }
+    }
+
+    fprintf(stderr, "==================================================\n");
+    fprintf(stderr, " AUTO-TUNE COMPLETE. LOCKING GAIN TO: %.2f dB\n", best_gain);
+    fprintf(stderr, "==================================================\n\n");
+
+    // Lock the hardware to the winning value before returning
+    uhd_usrp_set_rx_gain(rx_ctx->usrp, best_gain, rx_ctx->channel, "");
+
+    FILE *f = fopen(GAIN_CONFIG_FILE, "w");
+    if (f != NULL) {
+        fprintf(f, "%.2f\n", best_gain);
+        fclose(f);
+        fprintf(stderr, "Saved optimized gain to '" GAIN_CONFIG_FILE "'.\n");
+    } else {
+        fprintf(stderr, "WARNING: Could not write to '" GAIN_CONFIG_FILE "'. Tune will not persist.\n");
+    }
 }
 
 // Issues a stream command to the SDR and receives data into the ring buffer

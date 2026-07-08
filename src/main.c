@@ -11,16 +11,6 @@
 #include <pthread.h>
 #include <curl/curl.h>
 
-// TODO: error handling audit, pointer existence checks
-// TODO: unit tests?
-// TODO: error messages on early return exits?
-// TODO: syntax consistency check
-// TODO: comment style and wording should be professional
-
-// TODO: install instructions for influxdb, 1500 user added
-
-// TODO: include message skipping verbose messages
-
 radar_state_ctx_t *g_radar_ctx = NULL;
 
 // Global shutdown signal flag, ensuring multi-thread safety

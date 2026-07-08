@@ -259,8 +259,6 @@ size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
     return active_count;
 }
 
-// TODO: update functions too silent on failure, gap or feature? they could return success instead
-
 void update_aircraft_landed(aircraft_t *ac, bool new_status) {
     assert(ac != NULL);
 

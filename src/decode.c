@@ -116,8 +116,6 @@ static void on_message(mode_s_t *mode_s, struct mode_s_msg *mm) {
     uint32_t icao = (mm->aa1 << 16) | (mm->aa2 << 8) | mm->aa3;
     aircraft_t *ac = NULL;
 
-    fprintf(stderr, "Message decoded.\n");
-
     // Here is the only case with an '*_or_create()' call, 
     // so we only register a new aircraft if its certainly in the air.
     // TODO: only register aircraft that is not transmitting only an all-call reply to filter out unusable data

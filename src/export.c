@@ -161,8 +161,6 @@ static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t cou
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK)
         fprintf(stderr, "InfluxDB export failed: %s\n", curl_easy_strerror(res));
-
-    fprintf(stderr, "Radar state posted to influx.\n");
     
     #undef APPEND
     #undef COMMA

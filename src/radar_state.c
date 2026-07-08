@@ -244,7 +244,7 @@ size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
                 snapshot[active_count].squawk = ac->squawk;
                 snapshot[active_count].wake_vortex_tc = ac->wake_vortex_tc;
                 snapshot[active_count].wake_vortex_ca = ac->wake_vortex_ca;
-                strncpy(snapshot[active_count].callsign, ac->callsign, 9);
+                memcpy(snapshot[active_count].callsign, ac->callsign, 9);
                 snapshot[active_count].is_emergency = (ac->last_emergency_ms != 0);
                 snapshot[active_count].is_ident = (ac->last_ident_ms != 0);
                 

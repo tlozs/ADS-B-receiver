@@ -46,7 +46,7 @@ static char* create_auth_header_from_env(size_t *out_header_len) {
     // getenv() returns process-owned storage, so we only read from it.
     const char *raw_token = getenv("INFLUX_TOKEN");
     if (!raw_token) {
-        fprintf(stderr, "FATAL: INFLUX_TOKEN environment variable is not set.\n");
+        fprintf(stderr, "ERROR: INFLUX_TOKEN environment variable is not set.\n");
         return NULL;
     }
     size_t raw_token_len = strlen(raw_token);
@@ -58,7 +58,7 @@ static char* create_auth_header_from_env(size_t *out_header_len) {
     // Assemble the auth header.
     char *auth_header = malloc(*out_header_len);
     if (!auth_header) {
-        fprintf(stderr, "FATAL: Failed to allocate memory for the InfluxDB authorization header.\n");
+        fprintf(stderr, "ERROR: Failed to allocate memory for the InfluxDB authorization header.\n");
         return NULL;
     }
 
@@ -81,7 +81,7 @@ static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t cou
     #define APPEND(...) do { \
         int w = snprintf(payload + offset, max_payload_size - offset, __VA_ARGS__); \
         if (w < 0 || (size_t)w >= (max_payload_size - offset)) { \
-            fprintf(stderr, "Buffer overflow prevented during Line Protocol formatting.\n"); \
+            fprintf(stderr, "WARNING: Buffer overflow prevented during Line Protocol formatting.\n"); \
             free(payload); \
             return; \
         } \
@@ -160,7 +160,7 @@ static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t cou
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)offset);
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK)
-        fprintf(stderr, "InfluxDB export failed: %s\n", curl_easy_strerror(res));
+        fprintf(stderr, "WARNING: InfluxDB export failed: %s\n", curl_easy_strerror(res));
     
     #undef APPEND
     #undef COMMA
@@ -183,11 +183,11 @@ int run_export_loop(radar_state_ctx_t *ctx, atomic_bool *keep_running) {
     free(auth_header);
 
     if (!curl) {
-        fprintf(stderr, "FATAL: Failed to set up the InfluxDB network handle.\n");
+        fprintf(stderr, "ERROR: Failed to set up the InfluxDB network handle.\n");
         return EXIT_FAILURE;
     }
     if (!headers) {
-        fprintf(stderr, "FATAL: Failed to allocate curl header list.\n");
+        fprintf(stderr, "ERROR: Failed to allocate curl header list.\n");
         exit_status = EXIT_FAILURE;
         goto cleanup_curl;
     }
@@ -197,7 +197,7 @@ int run_export_loop(radar_state_ctx_t *ctx, atomic_bool *keep_running) {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, suppress_output_callback) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 800L) != CURLE_OK) {
         
-        fprintf(stderr, "FATAL: Failed to configure the InfluxDB HTTP client.\n");
+        fprintf(stderr, "ERROR: Failed to configure the InfluxDB HTTP client.\n");
         exit_status = EXIT_FAILURE;
         goto cleanup_curl_list;
     }
@@ -210,7 +210,7 @@ int run_export_loop(radar_state_ctx_t *ctx, atomic_bool *keep_running) {
     size_t max_payload_size = MAX_AIRCRAFT * 512 * sizeof(char);
     char *payload = malloc(max_payload_size);
     if (!payload) {
-        fprintf(stderr, "Failed to allocate InfluxDB payload buffer.\n");
+        fprintf(stderr, "ERROR: Failed to allocate InfluxDB payload buffer.\n");
         exit_status = EXIT_FAILURE;
         goto cleanup_curl_list;
     }
@@ -219,10 +219,12 @@ int run_export_loop(radar_state_ctx_t *ctx, atomic_bool *keep_running) {
     // Establish the baseline time immediately before entering the loop.
     struct timespec next_wakeup;
     if (clock_gettime(CLOCK_MONOTONIC, &next_wakeup) != 0) {
-        fprintf(stderr, "FATAL: Failed to read the monotonic clock for export scheduling: %s\n", strerror(errno));
+        fprintf(stderr, "ERROR: Failed to read the monotonic clock for export scheduling: %s\n", strerror(errno));
         exit_status = EXIT_FAILURE;
         goto cleanup_payload;
     }
+
+    fprintf(stderr, "Export loop started.\n");
 
     while (atomic_load(keep_running)) {
         // Schedule the next export exactly one second later.

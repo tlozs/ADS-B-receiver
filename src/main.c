@@ -52,6 +52,28 @@ static int setup_signals() {
     return EXIT_SUCCESS;
 }
 
+static void print_benchmark_results(time_t start, time_t end) {
+    char start_str[32], end_str[32];
+        
+        // Format timestamps to InfluxDB RFC3339 format (UTC)
+    strftime(start_str, sizeof(start_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&start));
+    strftime(end_str, sizeof(end_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&end));
+
+    fprintf(stderr, "\n========================================================================\n");
+    fprintf(stderr, "BENCHMARK COMPLETE. RUN THESE QUERIES IN INFLUXDB TO ANALYZE RESULTS:\n");
+    fprintf(stderr, "========================================================================\n\n");
+    
+    fprintf(stderr, "-- 1. Total Unique Aircraft (Capacity Test)\n");
+    fprintf(stderr, "SELECT count(DISTINCT(\"icao\")) FROM \"aircraft\" WHERE \"lat\" IS NOT NULL AND time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
+    
+    fprintf(stderr, "-- 2. Total Telemetry Rows (Reliability Test)\n");
+    fprintf(stderr, "SELECT count(\"lat\") FROM \"aircraft\" WHERE time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
+    
+    fprintf(stderr, "-- 3. Maximum Geographic Range (Horizon Test)\n");
+    fprintf(stderr, "SELECT min(\"lat\"), max(\"lat\"), min(\"lon\"), max(\"lon\") FROM \"aircraft\" WHERE time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
+    fprintf(stderr, "========================================================================\n\n");
+}
+
 int main(int argc, char **argv) {
     bool run_benchmark = false;
     time_t benchmark_start = 0;
@@ -70,13 +92,13 @@ int main(int argc, char **argv) {
 
     // Register the signals
     if (setup_signals() != EXIT_SUCCESS) {
-        fprintf(stderr, "FATAL: Failed to register signal handlers.\n");
+        fprintf(stderr, "ERROR: Failed to register signal handlers.\n");
         return EXIT_FAILURE;
     }
 
     // Curl global state needs to be initialized before any worker thread starts.
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
-        fprintf(stderr, "Failed to initialize libcurl.\n");
+        fprintf(stderr, "ERROR: Failed to initialize libcurl.\n");
         return EXIT_FAILURE;
     }
 
@@ -89,44 +111,54 @@ int main(int argc, char **argv) {
     pthread_t rx_thread;
     
     // Initialize rx streamer
+    fprintf(stderr, "Setting up RX context...\n");
     if (init_usrp(&rx_ctx) != EXIT_SUCCESS) {
         exit_status = EXIT_FAILURE;
         goto cleanup_curl;
     }
+    fprintf(stderr, "RX context created.\n");
     
     // Initialize decode context
+    fprintf(stderr, "Setting up decode context...\n");
     if (init_decode(&decode_ctx, rx_ctx.samps_per_buff) != EXIT_SUCCESS) {
-        fprintf(stderr, "Failed to initialize decode context.\n");
+        fprintf(stderr, "ERROR: Failed to initialize decode context.\n");
         exit_status = EXIT_FAILURE;
         goto cleanup_rx;
     }
+    fprintf(stderr, "Decode context created.\n");
     
     // Initialize ring buffer
+    fprintf(stderr, "Creating ring buffer...\n");
     rb = ring_buffer_create(rx_ctx.samps_per_buff);
     if (!rb) {
-        fprintf(stderr, "Failed to allocate ring buffer.\n");
+        fprintf(stderr, "ERROR: Failed to allocate ring buffer.\n");
         exit_status = EXIT_FAILURE;
         goto cleanup_decode;
     }
+    fprintf(stderr, "Ring buffer created.\n");
 
     // Initialize radar state
+    fprintf(stderr, "Setting up radar...\n");
     if (init_radar_state(&radar) != EXIT_SUCCESS) {
-        fprintf(stderr, "Failed to initialize radar state.\n");
+        fprintf(stderr, "ERROR: Failed to initialize radar state.\n");
         exit_status = EXIT_FAILURE;
         goto cleanup_rb;
     }
     g_radar_ctx = &radar;
+    fprintf(stderr, "Radar created.\n");
     
     // Spawn the decode thread
+    fprintf(stderr, "Starting decode thread...\n");
     if (spawn_decode_thread(&decode_ctx, rb, &keep_running, &decode_thread) != EXIT_SUCCESS) {
-        fprintf(stderr, "Failed to spawn decode thread.\n");
+        fprintf(stderr, "ERROR: Failed to spawn decode thread.\n");
         exit_status = EXIT_FAILURE;
         goto cleanup_radar;
     }
     
     // Spawn the receiver thread
+    fprintf(stderr, "Starting RX thread...\n");
     if (spawn_rx_thread(&rx_ctx, rb, &keep_running, &rx_thread) != EXIT_SUCCESS) {
-        fprintf(stderr, "Failed to spawn rx thread.\n");
+        fprintf(stderr, "ERROR: Failed to spawn rx thread.\n");
         atomic_store(&keep_running, false);
         exit_status = EXIT_FAILURE;
         goto cleanup_decode_thread;
@@ -151,27 +183,8 @@ int main(int argc, char **argv) {
 
     fprintf(stderr, "\nInitiating safe shutdown...\n");
 
-    if (run_benchmark && benchmark_start != 0 && benchmark_end != 0) {
-        char start_str[32], end_str[32];
-        
-        // Format timestamps to InfluxDB RFC3339 format (UTC)
-        strftime(start_str, sizeof(start_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&benchmark_start));
-        strftime(end_str, sizeof(end_str), "%Y-%m-%dT%H:%M:%SZ", gmtime(&benchmark_end));
-
-        printf("\n========================================================================\n");
-        printf("BENCHMARK COMPLETE. RUN THESE QUERIES IN INFLUXDB TO ANALYZE RESULTS:\n");
-        printf("========================================================================\n\n");
-        
-        printf("-- 1. Total Unique Aircraft (Capacity Test)\n");
-        printf("SELECT count(DISTINCT(\"icao\")) FROM \"aircraft\" WHERE \"lat\" IS NOT NULL AND time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
-        
-        printf("-- 2. Total Telemetry Rows (Reliability Test)\n");
-        printf("SELECT count(\"lat\") FROM \"aircraft\" WHERE time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
-        
-        printf("-- 3. Maximum Geographic Range (Horizon Test)\n");
-        printf("SELECT min(\"lat\"), max(\"lat\"), min(\"lon\"), max(\"lon\") FROM \"aircraft\" WHERE time >= '%s' AND time <= '%s'\n\n", start_str, end_str);
-        printf("========================================================================\n\n");
-    }
+    if (run_benchmark && exit_status == EXIT_SUCCESS && benchmark_start != 0 && benchmark_end != 0)
+        print_benchmark_results(benchmark_start, benchmark_end);
 
     // Normal shutdown path: wait for threads to finish
     int rx_join_rc = pthread_join(rx_thread, NULL);

@@ -118,12 +118,11 @@ static void on_message(mode_s_t *mode_s, struct mode_s_msg *mm) {
 
     // Here is the only case with an '*_or_create()' call, 
     // so we only register a new aircraft if its certainly in the air.
-    // TODO: only register aircraft that is not transmitting only an all-call reply to filter out unusable data
     if (determine_certainly_airborne(mm)) {
         ac = get_or_create_aircraft(g_radar_ctx, icao);
         // Drop packet if there is no empty space in the registry.
         if (!ac) {
-            fprintf(stderr, "RAM aircraft registry full, dropping packet!\n");
+            fprintf(stderr, "WARNING: RAM aircraft registry full, dropping packet!\n");
             return;
         }
         update_aircraft_landed(ac, false);
@@ -213,6 +212,8 @@ static void do_decode(decode_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_ru
     assert(rb != NULL);
     assert(keep_running != NULL);
 
+    fprintf(stderr, "Decode thread started.\n");
+
     while (atomic_load(keep_running)) {
         // Safely acquire the block
         iq_samps_block_t *block = ring_buffer_acquire_read(rb);
@@ -276,7 +277,7 @@ int spawn_decode_thread(decode_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_
     // malloc is needed for the payload to survive the stack cleanup
     decode_thread_args_t *args = malloc(sizeof(decode_thread_args_t));
     if (!args) {
-        fprintf(stderr, "Failed to allocate memory for decode thread args.\n");
+        fprintf(stderr, "ERROR: Failed to allocate memory for decode thread args.\n");
         return EXIT_FAILURE;
     }
     args->ctx = ctx;

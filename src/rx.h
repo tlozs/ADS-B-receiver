@@ -12,7 +12,6 @@ typedef struct {
     uhd_rx_streamer_handle rx_streamer;
     uhd_rx_metadata_handle md;
     size_t samps_per_buff;
-    bool verbose;
     int16_t *trash_buffer;
 } rx_ctx_t;
 

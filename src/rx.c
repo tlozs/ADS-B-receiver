@@ -24,8 +24,6 @@
 
 int init_usrp(rx_ctx_t *ctx) {
     assert(ctx != NULL);
-    
-    ctx->verbose = false;
 
     // Define configuration values
     double freq          = 1090e6;
@@ -52,7 +50,6 @@ int init_usrp(rx_ctx_t *ctx) {
     };
 
     // Create USRP
-    fprintf(stderr, "Creating USRP...\n");
     EXECUTE_OR_GOTO(return_error, uhd_usrp_make(&ctx->usrp, ""))
 
     // Create RX streamer and metadata
@@ -94,29 +91,23 @@ int init_usrp(rx_ctx_t *ctx) {
     }
     
 free_rx_metadata:
-    if (ctx->verbose) fprintf(stderr, "Cleaning up RX metadata.\n");
     uhd_rx_metadata_free(&ctx->md);
 free_rx_streamer:
-    if (ctx->verbose) fprintf(stderr, "Cleaning up RX streamer.\n");
     uhd_rx_streamer_free(&ctx->rx_streamer);
 free_usrp:
-    if (ctx->verbose) fprintf(stderr, "Cleaning up USRP.\n");
     if (return_code != EXIT_SUCCESS && ctx->usrp != NULL) {
         uhd_usrp_last_error(ctx->usrp, error_string, 512);
-        fprintf(stderr, "USRP reported the following error: %s\n", error_string);
+        fprintf(stderr, "ERROR: USRP reported the following error: %s\n", error_string);
     }
     uhd_usrp_free(&ctx->usrp);
 return_error:
 
-    fprintf(stderr, (return_code ? "Failure\n" : "Success\n"));
     return return_code;
 }
 
 void teardown_usrp(rx_ctx_t *ctx) {
     if (!ctx) return;
 
-    if (ctx->verbose) fprintf(stderr, "Tearing down SDR hardware...\n");
-    
     free(ctx->trash_buffer);
     if (ctx->md) uhd_rx_metadata_free(&ctx->md);
     if (ctx->rx_streamer) uhd_rx_streamer_free(&ctx->rx_streamer);
@@ -130,14 +121,15 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_run
     assert(rb != NULL);
     assert(keep_running != NULL);
 
+    fprintf(stderr, "RX thread started.\n");
+
     uhd_stream_cmd_t stream_cmd = {
         .stream_mode = UHD_STREAM_MODE_START_CONTINUOUS,
         .stream_now  = true
     };
     
-    fprintf(stderr, "Issuing stream command.\n");
     if (uhd_rx_streamer_issue_stream_cmd(ctx->rx_streamer, &stream_cmd) != 0) {
-        fprintf(stderr, "Failed to issue stream command.\n");
+        fprintf(stderr, "ERROR: Failed to issue stream command.\n");
         goto fatal_error;
     }
     
@@ -163,7 +155,7 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_run
         
         // Receive directly into the shared memory
         if (uhd_rx_streamer_recv(ctx->rx_streamer, buffs_ptr, ctx->samps_per_buff, &ctx->md, 3.0, false, &num_rx_samps) != 0) {
-            fprintf(stderr, "FATAL: Streamer receive API failed.\n");
+            fprintf(stderr, "ERROR: Streamer receive API failed.\n");
             goto fatal_error;
         }
         
@@ -171,7 +163,7 @@ static void do_rx_stream(rx_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_run
         uhd_rx_metadata_error_code_t error_code;
         uhd_rx_metadata_error_code(ctx->md, &error_code);
         if (error_code == UHD_RX_METADATA_ERROR_CODE_TIMEOUT) {
-            fprintf(stderr, "FATAL: RX Stream timeout. Hardware disconnected?\n");
+            fprintf(stderr, "ERROR: RX Stream timeout. Hardware disconnected?\n");
             goto fatal_error;
         // Treat other codes (like OUT_OF_SEQUENCE drops) as warnings, let the loop recover
         } else if (error_code != UHD_RX_METADATA_ERROR_CODE_NONE)
@@ -224,7 +216,7 @@ int spawn_rx_thread(rx_ctx_t *ctx, ring_buffer_t *rb, atomic_bool *keep_running,
     // malloc is needed for the payload to survive the stack cleanup
     rx_thread_args_t *args = malloc(sizeof(rx_thread_args_t));
     if (!args) {
-        fprintf(stderr, "Failed to allocate memory for rx thread args.\n");
+        fprintf(stderr, "ERROR: Failed to allocate memory for rx thread args.\n");
         return EXIT_FAILURE;
     }
     args->ctx = ctx;

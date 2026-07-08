@@ -24,7 +24,7 @@ static uint64_t get_system_tick_ms() {
 
     // If both clocks fail, log the concrete OS error and return 0.
     // The time deltas will be momentarily incorrect, but the process stays alive.
-    fprintf(stderr, "CRITICAL: Monotonic hardware clocks are completely unavailable: %s\n", strerror(errno));
+    fprintf(stderr, "ERROR: Monotonic hardware clocks are completely unavailable: %s\n", strerror(errno));
     return 0;
 }
 

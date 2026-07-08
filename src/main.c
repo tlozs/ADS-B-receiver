@@ -128,15 +128,17 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Ring buffer created.\n");
 
     // Initialize radar state
-    fprintf(stderr, "Setting up radar...\n");
+    fprintf(stderr, "Initializing radar state...\n");
     if (init_radar_state(&radar) != EXIT_SUCCESS) {
         fprintf(stderr, "ERROR: Failed to initialize radar state.\n");
         exit_status = EXIT_FAILURE;
         goto cleanup_rb;
     }
     g_radar_ctx = &radar;
-    fprintf(stderr, "Radar created.\n");
+    fprintf(stderr, "Radar state initialized.\n");
     
+    fprintf(stderr, "\nRadar is live. Listening for ADS-B packets. Press Ctrl+C to stop...\n\n");
+
     // Spawn the decode thread
     fprintf(stderr, "Starting decode thread...\n");
     if (spawn_decode_thread(&decode_ctx, rb, &keep_running, &decode_thread) != EXIT_SUCCESS) {
@@ -153,8 +155,6 @@ int main(int argc, char **argv) {
         exit_status = EXIT_FAILURE;
         goto cleanup_decode_thread;
     }
-    
-    fprintf(stderr, "\nRadar is live. Listening for ADS-B packets. Press Ctrl+C to stop...\n\n");
     
     if (run_benchmark) {
         signal(SIGALRM, handle_sigint); 

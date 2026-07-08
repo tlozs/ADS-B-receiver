@@ -137,6 +137,7 @@ aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
         // Initialize the fresh state
         first_empty_slot->icao = icao;
         first_empty_slot->is_dirty = false;
+        first_empty_slot->has_telemetry = false;
         first_empty_slot->landed = false;
         first_empty_slot->last_update_ms = now_ms;
         first_empty_slot->last_emergency_ms = 0;
@@ -230,7 +231,7 @@ size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
             
             // Only snapshot aircraft that have recent data
             // Also check for uninitialized data for every field
-            if (ac->is_dirty) {
+            if (ac->is_dirty && ac->has_telemetry) {
                 snapshot[active_count].icao = ac->icao;
                 snapshot[active_count].lat = ac->lat;
                 snapshot[active_count].lon = ac->lon;
@@ -244,10 +245,8 @@ size_t create_snapshot(radar_state_ctx_t* ctx, aircraft_snapshot_t *snapshot) {
                 snapshot[active_count].wake_vortex_tc = ac->wake_vortex_tc;
                 snapshot[active_count].wake_vortex_ca = ac->wake_vortex_ca;
                 strncpy(snapshot[active_count].callsign, ac->callsign, 9);
-                snapshot[active_count].is_emergency = 
-                    now_ms - ac->last_emergency_ms <= STATUS_ALERT_PERSISTENCE;
-                snapshot[active_count].is_ident = 
-                    now_ms - ac->last_ident_ms <= STATUS_IDENT_PERSISTENCE;
+                snapshot[active_count].is_emergency = (ac->last_emergency_ms != 0);
+                snapshot[active_count].is_ident = (ac->last_ident_ms != 0);
                 
                 // Mark as clean so we don't send duplicate static data next second
                 ac->is_dirty = false;
@@ -267,10 +266,11 @@ void update_aircraft_landed(aircraft_t *ac, bool new_status) {
 
     pthread_mutex_lock(&ac->mutex);
 
-    ac->landed = new_status;
-    
-    ac->is_dirty = true;
-    ac->last_update_ms = get_system_tick_ms();
+    if (ac->landed != new_status) {
+        ac->landed = new_status;
+        ac->is_dirty = true;
+        ac->last_update_ms = get_system_tick_ms();
+    }
     
     pthread_mutex_unlock(&ac->mutex);
 }
@@ -380,6 +380,7 @@ void update_aircraft_coords(aircraft_t *ac, int32_t cpr_lat, int32_t cpr_lon, bo
         }
     }
     
+    ac->has_telemetry = true;
     ac->is_dirty = true;
     ac->last_update_ms = now_ms;
     
@@ -402,6 +403,7 @@ void update_aircraft_altitude(aircraft_t *ac, int32_t alt, int32_t unit, bool is
     else
         ac->alt_baro = alt;
     
+    ac->has_telemetry = true;
     ac->is_dirty = true;
     ac->last_update_ms = get_system_tick_ms();
     
@@ -425,6 +427,7 @@ void update_aircraft_velocity(aircraft_t *ac, int32_t velocity, bool is_to_air, 
     ac->heading = heading;
     ac->vert_rate = vert_rate;
     
+    ac->is_dirty = true;
     ac->is_dirty = true;
     ac->last_update_ms = get_system_tick_ms();
     

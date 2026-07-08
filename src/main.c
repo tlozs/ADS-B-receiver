@@ -19,6 +19,8 @@
 
 // TODO: install instructions for influxdb, 1500 user added
 
+// TODO: include message skipping verbose messages
+
 radar_state_ctx_t *g_radar_ctx = NULL;
 
 // Global shutdown signal flag, ensuring multi-thread safety

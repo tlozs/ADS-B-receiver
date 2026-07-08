@@ -55,6 +55,7 @@ typedef struct {
     bool is_dirty;        
     bool landed;
     bool last_cpr_is_even;
+    bool has_telemetry;
     uint8_t wake_vortex_tc;
     uint8_t wake_vortex_ca;
     char callsign[9];

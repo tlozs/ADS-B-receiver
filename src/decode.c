@@ -38,7 +38,7 @@ int init_decode(decode_ctx_t *ctx, size_t samps_per_buff) {
     mode_s_init(ctx->mode_s);
     ctx->mode_s->check_crc  = 1;
     ctx->mode_s->fix_errors = 1;
-    ctx->mode_s->aggressive = 0;
+    ctx->mode_s->aggressive = 1;
 
     return EXIT_SUCCESS;
 }
@@ -120,6 +120,7 @@ static void on_message(mode_s_t *mode_s, struct mode_s_msg *mm) {
 
     // Here is the only case with an '*_or_create()' call, 
     // so we only register a new aircraft if its certainly in the air.
+    // TODO: only register aircraft that is not transmitting only an all-call reply to filter out unusable data
     if (determine_certainly_airborne(mm)) {
         ac = get_or_create_aircraft(g_radar_ctx, icao);
         // Drop packet if there is no empty space in the registry.

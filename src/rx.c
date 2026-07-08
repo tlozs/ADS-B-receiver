@@ -30,7 +30,7 @@ int init_usrp(rx_ctx_t *ctx) {
     // Define configuration values
     double freq          = 1090e6;
     double rate          = 2e6;
-    double gain          = 70;
+    double gain          = 35;
     size_t channel       = 0;
     int return_code      = EXIT_SUCCESS;
     char error_string[512];
@@ -209,7 +209,7 @@ static void *rx_thread_func(void *arg) {
     assert(args->ctx != NULL);
     assert(args->rb != NULL);
     assert(args->keep_running != NULL);
-    
+
     do_rx_stream(args->ctx, args->rb, args->keep_running);
     free(args);
     return NULL;

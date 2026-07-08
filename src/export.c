@@ -16,7 +16,7 @@
 // aircraft,icao=A1B2C3 lat=48.12345,lon=8.34567,alt_baro=35000i,alt_geom=35200i,velocity_to_ground=450i,velocity_to_air=465i,heading=270i,vert_rate=-1500i,squawk=7700i,wake_vortex_tc=2i,wake_vortex_ca=4i,callsign="RYR123",is_emergency=t,is_ident=t 1719900000
 // 257 characters in total
 
-#define INFLUX_URL "http://localhost:8181/api/v3/write_lp?db=radar&precision=second"
+#define INFLUX_URL "http://localhost:8181/api/v3/write_lp?db=radar&no_sync=true&precision=second"
 
 // libcurl passes the incoming data here chunk by chunk.
 // We must return the exact number of bytes we were given to tell libcurl we successfully processed them.

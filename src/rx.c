@@ -30,7 +30,7 @@ int init_usrp(rx_ctx_t *ctx) {
     // Define configuration values
     double freq          = 1090e6;
     double rate          = 2e6;
-    double gain          = 35;
+    double gain          = 29;
     size_t channel       = 0;
     int return_code      = EXIT_SUCCESS;
     char error_string[512];

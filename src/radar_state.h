@@ -88,6 +88,7 @@ typedef struct {
     aircraft_t repo[MAX_AIRCRAFT];
     pthread_mutex_t mutex;
     atomic_int valid_telemetry_count;
+    atomic_int aircraft_created_count;
 } radar_state_ctx_t;
 
 // The global pointer to the radar state context, needed inside the on_message callback.
@@ -95,6 +96,9 @@ extern radar_state_ctx_t *g_radar_ctx;
 
 // Initializes the aircraft repository inside the RAM, ready to get filled.
 int init_radar_state(radar_state_ctx_t *ctx);
+
+// Wipes all aircraft data from the RAM repository.
+void clear_radar_state(radar_state_ctx_t *ctx);
 
 // Clears up the aircraft repository from memory. 
 void teardown_radar_state(radar_state_ctx_t *ctx);

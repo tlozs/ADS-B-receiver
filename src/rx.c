@@ -140,15 +140,15 @@ void run_auto_tune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx) {
     assert(radar_ctx != NULL);
 
     // Define the sweep range
-    double test_gains[] = {20.0, 23.0, 26.0, 29.0, 32.0, 35.0, 38.0, 41.0, 44.0};
+    double test_gains[] = {20.0, 23.0, 26.0, 29.0, 32.0, 35.0, 38.0, 41.0, 44.0, 47.0};
     int num_gains = sizeof(test_gains) / sizeof(test_gains[0]);
     
     double best_gain = rx_ctx->default_gain;
-    int max_messages = 0;
+    double max_ppp = 0;
 
-    fprintf(stderr, "\n==================================================\n");
-    fprintf(stderr, " INITIATING SDR AUTO-TUNE SEQUENCE (60s per step)\n");
-    fprintf(stderr, "==================================================\n");
+    fprintf(stderr, "\n============================================================\n");
+    fprintf(stderr, " INITIATING SDR AUTO-TUNE SEQUENCE (5m per step, 50m total)\n");
+    fprintf(stderr, "============================================================\n");
 
     for (int i = 0; i < num_gains; i++) {
         double current_gain = test_gains[i];
@@ -156,24 +156,33 @@ void run_auto_tune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx) {
         // Command the UHD hardware to change gain on the fly
         uhd_usrp_set_rx_gain(rx_ctx->usrp, current_gain, rx_ctx->channel, "");
         uhd_usrp_get_rx_gain(rx_ctx->usrp, rx_ctx->channel, "", &current_gain);
-        fprintf(stderr, "RX gain set to %.2f dB\n", current_gain);
-        
-        // Reset the RAM counter for this specific test block
+
+        // Clear the aircraft repository to have a blank slate for every benchmark
+        // and reset the RAM counter for this specific test block
+        clear_radar_state(radar_ctx);
         atomic_store(&radar_ctx->valid_telemetry_count, 0);
+        atomic_store(&radar_ctx->aircraft_created_count, 0);
 
         fprintf(stderr, "Testing gain %.2f dB... ", current_gain);
         
         // Put the main thread to sleep.
         // The rx_thread and decode_thread continue running at maximum speed
-        sleep(60); 
+        sleep(300); 
 
         // Harvest the results
         int messages_caught = atomic_load(&radar_ctx->valid_telemetry_count);
-        fprintf(stderr, "Captured %4d valid telemetry packets.\n", messages_caught);
+        int new_aircrafts_created = atomic_load(&radar_ctx->aircraft_created_count);
+        double packets_per_plane = (new_aircrafts_created > 0) ? 
+                                   (messages_caught / (double)new_aircrafts_created) : 0.0;
+        fprintf(stderr, "Captured %4d valid CPR packets of %3d planes, resulting in %.2f packets per plane on average.\n", 
+                messages_caught, 
+                new_aircrafts_created,
+                packets_per_plane
+        );
 
-        // 5. Track the peak of the plateau
-        if (max_messages < messages_caught) {
-            max_messages = messages_caught;
+        // Track the peak of the plateau
+        if (max_ppp < packets_per_plane) {
+            max_ppp = packets_per_plane;
             best_gain = current_gain;
         }
     }

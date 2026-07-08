@@ -99,6 +99,17 @@ int init_radar_state(radar_state_ctx_t *ctx) {
     return EXIT_SUCCESS;
 }
 
+void clear_radar_state(radar_state_ctx_t *ctx) {
+    assert(ctx != NULL);
+
+    pthread_mutex_lock(&ctx->mutex);
+
+    for (size_t i = 0; i < MAX_AIRCRAFT; i++)
+        ctx->repo[i].icao = 0;
+
+    pthread_mutex_unlock(&ctx->mutex);
+}
+
 void teardown_radar_state(radar_state_ctx_t *ctx) {
     if (!ctx) return;
     pthread_mutex_destroy(&ctx->mutex);
@@ -119,6 +130,7 @@ aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
 
     pthread_mutex_lock(&ctx->mutex);
 
+    // Find existing aircraft
     for (size_t i = 0; i < MAX_AIRCRAFT; i++) {
         if (!first_empty_slot && ctx->repo[i].icao == 0)
             first_empty_slot = &ctx->repo[i];
@@ -131,7 +143,10 @@ aircraft_t *get_or_create_aircraft(radar_state_ctx_t *ctx, uint32_t icao) {
         }
     }
 
+    // Create new aircraft if no existing one was found
     if (first_empty_slot) {
+        atomic_fetch_add(&ctx->aircraft_created_count, 1);
+
         pthread_mutex_lock(&first_empty_slot->mutex);
         
         // Initialize the fresh state

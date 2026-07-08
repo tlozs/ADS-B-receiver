@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ring_buffer.h"
+#include "radar_state.h"
 #include <uhd.h>
 #include <stdbool.h>
 #include <stddef.h>

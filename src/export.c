@@ -246,7 +246,7 @@ int run_export_loop(radar_state_ctx_t *ctx, atomic_bool *keep_running) {
 
         size_t active_count = create_snapshot(ctx, snapshot_buffer);
         if (0 < active_count)
-            post_to_influx(curl, snapshot_buffer, active_count, payload, max_payload_size, last_curl_error);
+            post_to_influx(curl, snapshot_buffer, active_count, payload, max_payload_size, &last_curl_error);
 
         // Check if we ran over time before sleeping
         struct timespec current_time;

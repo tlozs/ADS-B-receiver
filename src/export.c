@@ -168,7 +168,7 @@ static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t cou
     } else {
         // If it succeeds and the system was previously in any error state, announce the recovery
         if (*last_error != CURLE_OK) {
-            fprintf(stderr, "INFO: InfluxDB connection restored. Resuming telemetry export.\n");
+            fprintf(stderr, "WARNING: InfluxDB connection restored. Resuming telemetry export.\n");
             *last_error = CURLE_OK;
         }
     }

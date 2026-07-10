@@ -256,11 +256,20 @@ int run_export_loop(radar_state_ctx_t *ctx, atomic_bool *keep_running) {
             // Skip the sleep this time and immediately start the next snapshot
             continue;
         }
-
+        
         // Sleep until the absolute target time.
         // The OS automatically accounts for the time spent doing the work.
-        int sleep_rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
-        if (sleep_rc != 0 && sleep_rc != EINTR) {
+        int sleep_rc;
+        do {
+            sleep_rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
+        } while (sleep_rc == EINTR && atomic_load(keep_running));
+
+        // If we gracefully exited because of Ctrl+C, bail out immediately
+        if (!atomic_load(keep_running))
+            break;
+
+        // Now check for actual hardware or OS errors
+        if (sleep_rc != 0) {
             fprintf(stderr, "ERROR: Export loop sleep failed: %s\n", strerror(sleep_rc));
             exit_status = EXIT_FAILURE;
             break;

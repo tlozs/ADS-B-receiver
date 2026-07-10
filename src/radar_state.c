@@ -64,8 +64,18 @@ bool is_valid_callsign(const char *callsign) {
 // Perfect for short distances and low CPU overhead.
 static double fast_distance_meters(double lat1, double lon1, double lat2, double lon2) {
     double r_earth = 6371000.0; // Earth radius in meters
+    
+    // Latitude difference (does not wrap)
     double d_lat = (lat2 - lat1) * (M_PI / 180.0);
+
+    // Longitude difference with 180th meridian normalization
+    double d_lon_deg = lon2 - lon1;
+    if (d_lon_deg > 180.0) 
+        d_lon_deg -= 360.0;
+    else if (d_lon_deg < -180.0) 
+        d_lon_deg += 360.0;
     double d_lon = (lon2 - lon1) * (M_PI / 180.0);
+
     double mean_lat = (lat1 + lat2) / 2.0 * (M_PI / 180.0);
     
     // Equirectangular approximation

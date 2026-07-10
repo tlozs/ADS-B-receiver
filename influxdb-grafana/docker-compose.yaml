@@ -2,7 +2,7 @@ services:
   influxdb3-enterprise:
     container_name: influxdb_enterprise
     image: influxdb:3.10-enterprise
-    restart: unless-stopped
+    restart: always
     ports:
       # Bound strictly to localhost to prevent UFW/iptables bypass leaks
       - "127.0.0.1:8181:8181"
@@ -21,14 +21,14 @@ services:
     secrets:
       - admin-token
     volumes:
-      - ./data:/var/lib/influxdb3/data
+      - ./data_influxdb:/var/lib/influxdb3/data
     networks:
       - radar_net
 
   influxdb3-explorer:
     container_name: influxdb_explorer
     image: influxdata/influxdb3-ui
-    restart: unless-stopped
+    restart: always
     ports:
       # Left open to the local network so I can view dashboards from a laptop
       - "8888:8080"
@@ -36,15 +36,16 @@ services:
       - --mode=admin
     networks:
       - radar_net
-  
+
   grafana:
     container_name: grafana
     image: grafana/grafana
-    restart: unless-stopped
+    restart: always
     ports:
       - '3000:3000'
     volumes:
       - ./resources:/var/lib/grafana/plugins/resources:ro
+      - ./data_grafana:/var/lib/grafana
     networks:
       - radar_net
 

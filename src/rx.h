@@ -24,9 +24,11 @@ int init_usrp(rx_ctx_t *ctx);
 // Clears up the context data from memory.
 void teardown_usrp(rx_ctx_t *ctx);
 
+double run_benchmark(radar_state_ctx_t *radar_ctx, atomic_bool *keep_running);
+
 // Tries a set of gain levels in order to determine where the most number of CPR packets can be decoded.
 // Saves the results to a config file to retain it when restarting the code.
-void run_auto_tune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx);
+void run_autotune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx, atomic_bool *keep_running);
 
 // Acts as a wrapper function for do_rx_stream, spawning it in its own dedicated thread.
 // Hides the ugly payload crafting and wrapper function of the thread creation logic.

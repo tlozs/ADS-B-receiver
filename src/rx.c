@@ -34,6 +34,9 @@ static double load_saved_gain(double fallback_default) {
             fprintf(stderr, "WARNING: '" GAIN_CONFIG_FILE "' is corrupted. Using default.\n");
             saved_gain = fallback_default;
         }
+        else {
+            fprintf(stderr, "'" GAIN_CONFIG_FILE "' found. Using saved gain setting.\n");    
+        }
         fclose(f);
     } else {
         fprintf(stderr, "No '" GAIN_CONFIG_FILE "' found. Using default.\n");
@@ -135,9 +138,52 @@ void teardown_usrp(rx_ctx_t *ctx) {
     if (ctx->usrp) uhd_usrp_free(&ctx->usrp);
 }
 
-void run_auto_tune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx) {
+double run_benchmark(radar_state_ctx_t *radar_ctx, atomic_bool *keep_running) {
+    assert(radar_ctx != NULL);
+    assert(keep_running != NULL);
+
+    fprintf(stderr, "Running benchmark... ");
+
+    // Clear the aircraft repository to have a blank slate for every benchmark
+    // and reset the RAM counters
+    clear_radar_state(radar_ctx);
+    atomic_store(&radar_ctx->valid_telemetry_count, 0);
+    atomic_store(&radar_ctx->aircraft_created_count, 0);
+
+    // Put the calling thread to sleep
+    // The rx_thread and decode_thread should be running
+    // If interrupted by a non-fatal signal, it goes back to sleep
+    // If interrupted by Ctrl+C, keep_running becomes false and it breaks instantly
+    unsigned int time_left = 300;
+    while (0 < time_left && atomic_load(keep_running))
+        time_left = sleep(time_left);
+
+    // Check if the user aborted the process
+    if (!atomic_load(keep_running)) {
+        fprintf(stderr, "[!] Benchmark interrupted by user.\n");
+        return -1.0;
+    }
+
+    // Harvest the results
+    int messages_caught = atomic_load(&radar_ctx->valid_telemetry_count);
+    int new_aircrafts_created = atomic_load(&radar_ctx->aircraft_created_count);
+    double packets_per_plane = (new_aircrafts_created > 0) ? 
+                                (messages_caught / (double)new_aircrafts_created) : 0.0;
+    fprintf(stderr, 
+            "Captured %4d valid CPR packets of %3d planes, "
+            "resulting in %.2f packets per plane on average.\n", 
+            messages_caught, 
+            new_aircrafts_created,
+            packets_per_plane
+    );
+
+    return packets_per_plane;
+}
+
+void run_autotune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx, atomic_bool *keep_running) {
     assert(rx_ctx != NULL);
     assert(radar_ctx != NULL);
+    assert(keep_running != NULL);
 
     // Define the sweep range
     double test_gains[] = {20.0, 23.0, 26.0, 29.0, 32.0, 35.0, 38.0, 41.0, 44.0, 47.0};
@@ -156,30 +202,16 @@ void run_auto_tune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx) {
         // Command the UHD hardware to change gain on the fly
         uhd_usrp_set_rx_gain(rx_ctx->usrp, current_gain, rx_ctx->channel, "");
         uhd_usrp_get_rx_gain(rx_ctx->usrp, rx_ctx->channel, "", &current_gain);
-
-        // Clear the aircraft repository to have a blank slate for every benchmark
-        // and reset the RAM counter for this specific test block
-        clear_radar_state(radar_ctx);
-        atomic_store(&radar_ctx->valid_telemetry_count, 0);
-        atomic_store(&radar_ctx->aircraft_created_count, 0);
-
         fprintf(stderr, "Testing gain %.2f dB... ", current_gain);
-        
-        // Put the main thread to sleep.
-        // The rx_thread and decode_thread continue running at maximum speed
-        sleep(300); 
 
-        // Harvest the results
-        int messages_caught = atomic_load(&radar_ctx->valid_telemetry_count);
-        int new_aircrafts_created = atomic_load(&radar_ctx->aircraft_created_count);
-        double packets_per_plane = (new_aircrafts_created > 0) ? 
-                                   (messages_caught / (double)new_aircrafts_created) : 0.0;
-        fprintf(stderr, "Captured %4d valid CPR packets of %3d planes, resulting in %.2f packets per plane on average.\n", 
-                messages_caught, 
-                new_aircrafts_created,
-                packets_per_plane
-        );
+        double packets_per_plane = run_benchmark(radar_ctx, keep_running);
 
+        if (!atomic_load(keep_running)) {
+            fprintf(stderr, "==================================================\n");
+            fprintf(stderr, "      AUTO-TUNE SEQUENCE ABORTED BY THE USER\n");
+            fprintf(stderr, "==================================================\n\n");
+            return;
+        }
         // Track the peak of the plateau
         if (max_ppp < packets_per_plane) {
             max_ppp = packets_per_plane;
@@ -196,9 +228,18 @@ void run_auto_tune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx) {
 
     FILE *f = fopen(GAIN_CONFIG_FILE, "w");
     if (f != NULL) {
-        fprintf(f, "%.2f\n", best_gain);
+        // Check if fprintf actually succeeded (catches "Disk Full" errors)
+        if (fprintf(f, "%.2f\n", best_gain) < 0) {
+            fprintf(stderr, "WARNING: Write error when writing to '" GAIN_CONFIG_FILE "' (disk full?). Tune will not persist.\n");
+        } else {
+            // Flush the C library buffer to the OS Kernel
+            // and command the kernel to write to the physical hardware immediately
+            fflush(f);
+            fsync(fileno(f));
+            fprintf(stderr, "Saved optimized gain to '" GAIN_CONFIG_FILE "'.\n");
+        }
+        // Safely close the file and invalidate the FILE pointer
         fclose(f);
-        fprintf(stderr, "Saved optimized gain to '" GAIN_CONFIG_FILE "'.\n");
     } else {
         fprintf(stderr, "WARNING: Could not write to '" GAIN_CONFIG_FILE "'. Tune will not persist.\n");
     }

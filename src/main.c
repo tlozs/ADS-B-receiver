@@ -43,29 +43,16 @@ static int setup_signals() {
     return EXIT_SUCCESS;
 }
 
-static void print_benchmark_results(radar_state_ctx_t *ctx) {
-    assert(ctx != NULL);
-
-    int total_valid_coords = atomic_load(&ctx->valid_telemetry_count);
-
-    fprintf(stderr, "\n========================================================================\n");
-    fprintf(stderr, "                           BENCHMARK COMPLETE\n");
-    fprintf(stderr, "========================================================================\n\n");
-    fprintf(stderr, " Total Valid CPR Packets Decoded: %d\n", total_valid_coords);
-    fprintf(stderr, " Average Decode Rate: %.2f packets/sec\n", total_valid_coords / 300.0);
-    fprintf(stderr, "========================================================================\n\n");
-}
-
 int main(int argc, char **argv) {
-    bool run_benchmark = false;
-    bool run_autotune = false;
+    bool do_benchmark = false;
+    bool do_autotune = false;
 
     // Check for the benchmark and autotune flag
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--benchmark") == 0)
-            run_benchmark = true;
+            do_benchmark = true;
         if (strcmp(argv[i], "--autotune") == 0)
-            run_autotune = true;
+            do_autotune = true;
     }
 
     int exit_status = EXIT_SUCCESS;
@@ -146,14 +133,16 @@ int main(int argc, char **argv) {
         goto cleanup_decode_thread;
     }
 
-    if (run_autotune)
-        run_auto_tune(&rx_ctx, &radar);
-    
-    if (run_benchmark) {
-        signal(SIGALRM, handle_sigint); 
-        atomic_store(&radar.valid_telemetry_count, 0);
-        alarm(300); 
-        fprintf(stderr, "\n>>> Benchmark mode enabled: Daemon will auto-terminate in 5 minutes. <<<\n\n");
+    // Run autotune or benchmark based on cmd arguments
+    if (do_autotune && exit_status == EXIT_SUCCESS)
+        run_autotune(&rx_ctx, &radar, &keep_running);
+    if (do_benchmark && exit_status == EXIT_SUCCESS) {
+        fprintf(stderr, "\n===========================================================\n");
+        fprintf(stderr, "        BENCHMARK MODE ACTIVE (duration: 5 minutes)\n");
+        fprintf(stderr, "===========================================================\n\n");
+        run_benchmark(&radar, &keep_running);
+        atomic_store(&keep_running, false);
+        goto shutdown;
     }
 
     // Start exporting to the database
@@ -161,18 +150,12 @@ int main(int argc, char **argv) {
         atomic_store(&keep_running, false);
         exit_status = EXIT_FAILURE;
     }
-
+    
+shutdown:
     fprintf(stderr, "\nInitiating safe shutdown...\n");
-
-    if (run_benchmark && exit_status == EXIT_SUCCESS)
-        print_benchmark_results(&radar);
-
-    // Normal shutdown path: wait for threads to finish
     int rx_join_rc = pthread_join(rx_thread, NULL);
     if (rx_join_rc != 0)
         fprintf(stderr, "ERROR: Failed to join RX thread during shutdown: %s\n", strerror(rx_join_rc));
-
-    // Cascading cleanup sequence
 cleanup_decode_thread:
     ring_buffer_abort(rb);
     int decode_join_rc = pthread_join(decode_thread, NULL);

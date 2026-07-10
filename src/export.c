@@ -68,7 +68,7 @@ static char* create_auth_header_from_env(size_t *out_header_len) {
 
 // Constructs a payload string in Line Protocol format from the snapshot data
 // and sends it as a POST request to the URL defined by the curl network handle.
-static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t count, char *payload, size_t max_payload_size) {
+static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t count, char *payload, size_t max_payload_size, CURLcode *last_error) {
     assert(curl != NULL);
     assert(snapshot != NULL);
     assert(payload != NULL);
@@ -159,8 +159,19 @@ static void post_to_influx(CURL *curl, aircraft_snapshot_t *snapshot, size_t cou
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)offset);
     CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK)
-        fprintf(stderr, "WARNING: InfluxDB export failed: %s\n", curl_easy_strerror(res));
+    if (res != CURLE_OK) {
+        // Log the error if it is the first failure, OR if the error type has changed
+        if (res != *last_error) {
+            fprintf(stderr, "WARNING: InfluxDB export failed: %s (Suppressing identical network errors)\n", curl_easy_strerror(res));
+            *last_error = res;
+        }
+    } else {
+        // If it succeeds and the system was previously in any error state, announce the recovery
+        if (*last_error != CURLE_OK) {
+            fprintf(stderr, "INFO: InfluxDB connection restored. Resuming telemetry export.\n");
+            *last_error = CURLE_OK;
+        }
+    }
     
     #undef APPEND
     #undef COMMA
@@ -224,6 +235,9 @@ int run_export_loop(radar_state_ctx_t *ctx, atomic_bool *keep_running) {
         goto cleanup_payload;
     }
 
+    // Track the specific database connection state across loop iterations
+    CURLcode last_curl_error = CURLE_OK;
+
     fprintf(stderr, "Export loop started.\n");
 
     while (atomic_load(keep_running)) {
@@ -232,7 +246,7 @@ int run_export_loop(radar_state_ctx_t *ctx, atomic_bool *keep_running) {
 
         size_t active_count = create_snapshot(ctx, snapshot_buffer);
         if (0 < active_count)
-            post_to_influx(curl, snapshot_buffer, active_count, payload, max_payload_size);
+            post_to_influx(curl, snapshot_buffer, active_count, payload, max_payload_size, last_curl_error);
 
         // Check if we ran over time before sleeping
         struct timespec current_time;

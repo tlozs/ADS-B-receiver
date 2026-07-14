@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <assert.h>
 
-#define GAIN_CONFIG_FILE "../conf/optimal_sdr_gain.conf"
+#define DEFAULT_CONFIG_PATH "./optimal_sdr_gain.conf"
 
 #define EXECUTE_OR_GOTO(label, ...) \
     if (__VA_ARGS__) {              \
@@ -25,55 +25,82 @@
         goto label;                 \
     }
 
-static double load_saved_gain(double fallback_default) {
+// Dynamically sets the config path using the OS environment variable.
+// Returns a heap-allocated string that the caller must free.
+static char* get_conf_path_env() {
+    // Fetch the configuration file location from the OS environment block.
+    // getenv() returns process-owned storage, so we only read from it.
+    char *path_raw = getenv("CONFIG_PATH");
+    if (!path_raw) {
+        fprintf(stderr, "WARNING: CONFIG_PATH environment variable is not set."
+                        "Using default location " DEFAULT_CONFIG_PATH "\n");
+        path_raw = DEFAULT_CONFIG_PATH;
+    }
+    size_t path_len = strlen(path_raw) + 1;
+    
+    char *config_path = malloc(path_len);
+    if (!config_path) {
+        fprintf(stderr, "ERROR: Failed to allocate memory to store the config path.\n");
+        return NULL;
+    }
+
+    snprintf(config_path, path_len, "%s", path_raw);
+    return config_path;
+}
+
+static double load_saved_gain(double fallback_default, const char *config_path) {
     double saved_gain = fallback_default;
-    FILE *f = fopen(GAIN_CONFIG_FILE, "r");
+    FILE *f = fopen(config_path, "r");
     
     if (f != NULL) {
         if (fscanf(f, "%lf", &saved_gain) != 1) {
-            fprintf(stderr, "WARNING: '" GAIN_CONFIG_FILE "' is corrupted. Using default.\n");
+            fprintf(stderr, "WARNING: '%s' is corrupted. Using default.\n", config_path);
             saved_gain = fallback_default;
         }
         else {
-            fprintf(stderr, "'" GAIN_CONFIG_FILE "' found. Using saved gain setting.\n");    
+            fprintf(stderr, "'%s' found. Using saved gain setting.\n", config_path);
         }
         fclose(f);
     } else {
-        fprintf(stderr, "No '" GAIN_CONFIG_FILE "' found. Using default.\n");
+        fprintf(stderr, "No '%s' found. Using default.\n", config_path);
     }
     
     return saved_gain;
 }
 
-static void write_gain_conf(double new_gain) {
-    FILE *f = fopen(GAIN_CONFIG_FILE, "w");
+static void write_gain_conf(double new_gain, const char *config_path) {
+    FILE *f = fopen(config_path, "w");
     if (f != NULL) {
         // Check if fprintf actually succeeded (catches "Disk Full" errors)
         if (fprintf(f, "%.2f\n", new_gain) < 0) {
-            fprintf(stderr, "WARNING: Write error when writing to '" GAIN_CONFIG_FILE "' (disk full?). Tune will not persist.\n");
+            fprintf(stderr, "WARNING: Write error when writing to '%s' (disk full?). Tune will not persist.\n", config_path);
         } else {
             // Flush the C library buffer to the OS Kernel
             // and command the kernel to write to the physical hardware immediately
             fflush(f);
             fsync(fileno(f));
-            fprintf(stderr, "Saved optimized gain to '" GAIN_CONFIG_FILE "'.\n");
+            fprintf(stderr, "Saved optimized gain to '%s'.\n", config_path);
         }
         // Safely close the file and invalidate the FILE pointer
         fclose(f);
     } else {
-        fprintf(stderr, "WARNING: Could not write to '" GAIN_CONFIG_FILE "'. Tune will not persist.\n");
+        fprintf(stderr, "WARNING: Could not write to '%s'. Tune will not persist.\n", config_path);
     }
 }
 
 int init_usrp(rx_ctx_t *ctx) {
     assert(ctx != NULL);
 
+    // Set up config path
+    ctx->config_path = get_conf_path_env();
+    if (!ctx->config_path) return EXIT_FAILURE;
+
     // Define configuration values
     ctx->channel         = 0;
     ctx->default_gain    = 29.0;
     double freq          = 1090e6;
     double rate          = 2e6;
-    double gain          = load_saved_gain(ctx->default_gain);
+    double gain          = load_saved_gain(ctx->default_gain, ctx->config_path);
     int return_code      = EXIT_SUCCESS;
     char error_string[512];
 
@@ -153,6 +180,7 @@ void teardown_usrp(rx_ctx_t *ctx) {
     if (!ctx) return;
 
     free(ctx->trash_buffer);
+    free(ctx->config_path);
     if (ctx->md) uhd_rx_metadata_free(&ctx->md);
     if (ctx->rx_streamer) uhd_rx_streamer_free(&ctx->rx_streamer);
     if (ctx->usrp) uhd_usrp_free(&ctx->usrp);
@@ -246,7 +274,7 @@ void run_autotune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx, atomic_bool *k
 
     // Lock the hardware to the winning value and save it before returning
     uhd_usrp_set_rx_gain(rx_ctx->usrp, best_gain, rx_ctx->channel, "");
-    write_gain_conf(best_gain);
+    write_gain_conf(best_gain, rx_ctx->config_path);
 }
 
 // Issues a stream command to the SDR and receives data into the ring buffer

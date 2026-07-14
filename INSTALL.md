@@ -226,6 +226,7 @@ INFLUX_TOKEN=$(docker exec influxdb_enterprise influxdb3 create token \
   --permission "db:radar:write" \
   --name "Radar-WriteOnly" | grep -o 'apiv3_[A-Za-z0-9_-]*' | head -n 1)
 UHD_IMAGES_DIR=$(find /usr/share/uhd -maxdepth 2 -type d -name "images" | sort -V | tail -n 1)
+CONFIG_PATH=/opt/adsb-radar/conf/optimal_sdr_gain.conf
 EOF
 ```
 

@@ -10,7 +10,7 @@ set -e
 REPO_PATH="/home/admin/Desktop/ADS-B-receiver"
 
 # Set this to the absolute directory path where the executable should be copied
-DEST_PATH="/home/admin/Desktop/adsb_demo/adsb_radar"
+DEST_PATH="/opt/adsb-radar/bin"
 
 # The name of the executable defined in the CMake configuration
 EXE_NAME="adsb_rx"

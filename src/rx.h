@@ -16,7 +16,7 @@ typedef struct {
     size_t channel;
     size_t samps_per_buff;
     int16_t *trash_buffer;
-    const char *config_path;
+    char *config_path;
 } rx_ctx_t;
 
 // Initializes the SDR with predefined configuration values and sets up the context data.

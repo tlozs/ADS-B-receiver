@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <assert.h>
 
-#define GAIN_CONFIG_FILE "sdr_gain.conf"
+#define GAIN_CONFIG_FILE "../conf/optimal_sdr_gain.conf"
 
 #define EXECUTE_OR_GOTO(label, ...) \
     if (__VA_ARGS__) {              \
@@ -43,6 +43,26 @@ static double load_saved_gain(double fallback_default) {
     }
     
     return saved_gain;
+}
+
+static void write_gain_conf(double new_gain) {
+    FILE *f = fopen(GAIN_CONFIG_FILE, "w");
+    if (f != NULL) {
+        // Check if fprintf actually succeeded (catches "Disk Full" errors)
+        if (fprintf(f, "%.2f\n", new_gain) < 0) {
+            fprintf(stderr, "WARNING: Write error when writing to '" GAIN_CONFIG_FILE "' (disk full?). Tune will not persist.\n");
+        } else {
+            // Flush the C library buffer to the OS Kernel
+            // and command the kernel to write to the physical hardware immediately
+            fflush(f);
+            fsync(fileno(f));
+            fprintf(stderr, "Saved optimized gain to '" GAIN_CONFIG_FILE "'.\n");
+        }
+        // Safely close the file and invalidate the FILE pointer
+        fclose(f);
+    } else {
+        fprintf(stderr, "WARNING: Could not write to '" GAIN_CONFIG_FILE "'. Tune will not persist.\n");
+    }
 }
 
 int init_usrp(rx_ctx_t *ctx) {
@@ -165,6 +185,7 @@ double run_benchmark(radar_state_ctx_t *radar_ctx, atomic_bool *keep_running) {
     }
 
     // Harvest the results
+    // TODO: TTL is not respected, does that reduce representativeness?
     int messages_caught = atomic_load(&radar_ctx->valid_telemetry_count);
     int new_aircrafts_created = atomic_load(&radar_ctx->aircraft_created_count);
     double packets_per_plane = (new_aircrafts_created > 0) ? 
@@ -223,26 +244,9 @@ void run_autotune(rx_ctx_t *rx_ctx, radar_state_ctx_t *radar_ctx, atomic_bool *k
     fprintf(stderr, " AUTO-TUNE COMPLETE. LOCKING GAIN TO: %.2f dB\n", best_gain);
     fprintf(stderr, "==================================================\n\n");
 
-    // Lock the hardware to the winning value before returning
+    // Lock the hardware to the winning value and save it before returning
     uhd_usrp_set_rx_gain(rx_ctx->usrp, best_gain, rx_ctx->channel, "");
-
-    FILE *f = fopen(GAIN_CONFIG_FILE, "w");
-    if (f != NULL) {
-        // Check if fprintf actually succeeded (catches "Disk Full" errors)
-        if (fprintf(f, "%.2f\n", best_gain) < 0) {
-            fprintf(stderr, "WARNING: Write error when writing to '" GAIN_CONFIG_FILE "' (disk full?). Tune will not persist.\n");
-        } else {
-            // Flush the C library buffer to the OS Kernel
-            // and command the kernel to write to the physical hardware immediately
-            fflush(f);
-            fsync(fileno(f));
-            fprintf(stderr, "Saved optimized gain to '" GAIN_CONFIG_FILE "'.\n");
-        }
-        // Safely close the file and invalidate the FILE pointer
-        fclose(f);
-    } else {
-        fprintf(stderr, "WARNING: Could not write to '" GAIN_CONFIG_FILE "'. Tune will not persist.\n");
-    }
+    write_gain_conf(best_gain);
 }
 
 // Issues a stream command to the SDR and receives data into the ring buffer

@@ -1,15 +1,30 @@
 services:
+  wal-cleanup:
+    container_name: wal_cleanup
+    image: alpine:latest
+    user: "${DAEMON_UID}:${DAEMON_GID}"
+    volumes:
+      - /opt/adsb-radar/data/influxdb:/var/lib/influxdb3/data
+    # This command finds and deletes any 0-byte files ending in .wal
+    # Fixes the error created on power loss, that would result in a database start-loop after reboot
+    command: /bin/sh -c "find /var/lib/influxdb3/data -type f -name '*.wal' -size 0c -print -delete"
+
   influxdb3-enterprise:
     container_name: influxdb_enterprise
     image: influxdb:3.10-enterprise
+    user: "${DAEMON_UID}:${DAEMON_GID}"
     restart: always
+    depends_on:
+      wal-cleanup:
+        condition: service_completed_successfully
     ports:
       # Bound strictly to localhost to prevent UFW/iptables bypass leaks
       - "127.0.0.1:8181:8181"
     environment:
-      - INFLUXDB3_ENTERPRISE_LICENSE_EMAIL=your.real.email@example.com
+      - INFLUXDB3_ENTERPRISE_LICENSE_EMAIL=${LICENSE_EMAIL}
       - INFLUXDB3_ENTERPRISE_LICENSE_TYPE=home
       - INFLUXDB3_LOG_FILTER=info
+      - INFLUXDB3_UNSET_VARS=INFLUXDB3_PLUGIN_DIR
     command:
       - influxdb3
       - serve
@@ -19,9 +34,10 @@ services:
       - --data-dir=/var/lib/influxdb3/data
       - --admin-token-file=/run/secrets/admin-token
     secrets:
-      - admin-token
+      - source: admin-token
+        target: /run/secrets/admin-token
     volumes:
-      - ./data_influxdb:/var/lib/influxdb3/data
+      - /opt/adsb-radar/data/influxdb:/var/lib/influxdb3/data
     networks:
       - radar_net
 
@@ -40,18 +56,19 @@ services:
   grafana:
     container_name: grafana
     image: grafana/grafana
+    user: "${DAEMON_UID}:${DAEMON_GID}"
     restart: always
     ports:
       - '3000:3000'
     volumes:
-      - ./resources:/var/lib/grafana/plugins/resources:ro
-      - ./data_grafana:/var/lib/grafana
+      - /opt/adsb-radar/resources/grafana:/var/lib/grafana/plugins/resources:ro
+      - /opt/adsb-radar/data/grafana:/var/lib/grafana
     networks:
       - radar_net
 
 secrets:
   admin-token:
-    file: ./admin-token.json
+    file: /opt/adsb-radar/conf/admin-token.json
 
 networks:
   radar_net:
